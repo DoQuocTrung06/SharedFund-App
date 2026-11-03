@@ -3,7 +3,6 @@ package com.sharedfund.app.model;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** Parsed display data from an EMV/VietQR payload; it never initiates a bank transfer. */
 public class ScannedQrPayment {
     public String bankBin;
     public String accountNumber;
@@ -39,7 +38,7 @@ public class ScannedQrPayment {
     private static String findTransferContent(String additionalData) {
         if (additionalData == null) return null;
         Map<String, String> fields = parseTlv(additionalData);
-        return fields.get("08"); // EMV additional data: purpose of transaction.
+        return fields.get("08");
     }
 
     private static Map<String, String> parseTlv(String input) {

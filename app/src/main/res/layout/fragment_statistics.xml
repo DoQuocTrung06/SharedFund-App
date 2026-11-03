@@ -4,23 +4,22 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/background"
+    android:fitsSystemWindows="true"
     android:fillViewport="true">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical">
-
-        <!-- Top App Bar -->
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_height="56dp"
+            android:background="@color/surface"
+            android:elevation="1dp"
             android:gravity="center_vertical"
             android:orientation="horizontal"
             android:paddingStart="12dp"
-            android:paddingTop="16dp"
-            android:paddingEnd="16dp"
-            android:paddingBottom="12dp">
+            android:paddingEnd="16dp">
 
             <ImageButton
                 android:id="@+id/btnStatBack"
@@ -28,6 +27,7 @@
                 android:layout_height="40dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="Back"
+                android:padding="8dp"
                 android:src="@drawable/ic_arrow_back"
                 app:tint="@color/text_primary" />
 
@@ -44,8 +44,6 @@
                 android:textSize="18sp"
                 android:textStyle="bold" />
         </LinearLayout>
-
-        <!-- Loading Indicator -->
         <ProgressBar
             android:id="@+id/pbStatLoading"
             android:layout_width="wrap_content"
@@ -53,8 +51,6 @@
             android:layout_gravity="center"
             android:layout_marginTop="16dp"
             android:visibility="gone" />
-
-        <!-- Net Balance Card -->
         <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -79,8 +75,6 @@
                     android:text="@string/stat_net_balance"
                     android:textColor="@color/text_secondary"
                     android:textSize="13sp" />
-
-                <!-- Auto-sizing net balance to prevent cutting of large numbers -->
                 <TextView
                     android:id="@+id/tvStatNetBalance"
                     android:layout_width="match_parent"
@@ -97,15 +91,11 @@
                     app:autoSizeMinTextSize="16sp"
                     app:autoSizeStepGranularity="1sp"
                     app:autoSizeTextType="uniform" />
-
-                <!-- Income / Expense 2 Column Row -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="16dp"
                     android:orientation="horizontal">
-
-                    <!-- Total Income -->
                     <LinearLayout
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
@@ -140,8 +130,6 @@
                             app:autoSizeStepGranularity="1sp"
                             app:autoSizeTextType="uniform" />
                     </LinearLayout>
-
-                    <!-- Total Expense -->
                     <LinearLayout
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
@@ -181,8 +169,6 @@
 
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
-
-        <!-- Category Breakdown Card (Visual chart representation) -->
         <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -208,8 +194,6 @@
                     android:textColor="@color/text_primary"
                     android:textSize="16sp"
                     android:textStyle="bold" />
-
-                <!-- Dynamic Category Progress Container -->
                 <LinearLayout
                     android:id="@+id/layoutCategoryBars"
                     android:layout_width="match_parent"
@@ -230,8 +214,6 @@
 
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
-
-        <!-- Top Expenses Section -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

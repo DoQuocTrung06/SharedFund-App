@@ -20,7 +20,6 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 
-/** Uploads user-selected avatars to Supabase Storage and persists their public URL in profiles. */
 public class ProfileRepository {
     private static final long MAX_IMAGE_BYTES = 5L * 1024L * 1024L;
     private static final String AVATAR_BUCKET = "avatars";
@@ -31,7 +30,9 @@ public class ProfileRepository {
         void onError(String message);
     }
 
-    private final OkHttpClient client = new OkHttpClient();
+    private final OkHttpClient client = new OkHttpClient.Builder()
+            .dns(SafeDns.getInstance())
+            .build();
     private final ExecutorService io = Executors.newSingleThreadExecutor();
 
     public void uploadAvatar(ContentResolver resolver, Uri imageUri, String userId, String accessToken,

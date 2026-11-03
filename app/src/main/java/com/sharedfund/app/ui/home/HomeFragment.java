@@ -14,11 +14,15 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.EditText;
+import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import com.sharedfund.app.ui.widget.AppToaster;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -34,30 +38,37 @@ import com.google.android.material.textfield.TextInputLayout;
 import com.sharedfund.app.MainActivity;
 import com.sharedfund.app.R;
 import com.sharedfund.app.adapter.RoomAdapter;
+import com.sharedfund.app.data.RoomRepository;
+import com.sharedfund.app.data.UserSessionManager;
 import com.sharedfund.app.model.Room;
 import com.sharedfund.app.ui.profile.AvatarImageLoader;
 
 import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
-/**
- * Màn hình Trang chủ (HomeFragment)
- * Quản lý danh sách quỹ, tổng số dư toàn bộ, trạng thái tải và các thao tác Tạo / Tham gia quỹ.
- * Đã chuẩn hóa kiểm thử giao diện: không vỡ màn hình, cuộn danh sách mượt mà, số tiền không bị cắt,
- * thông báo thiếu dữ liệu bằng TextInputLayout, nút bấm phản hồi tốt, empty & loading state đầy đủ.
- */
 public class HomeFragment extends Fragment implements RoomAdapter.OnRoomClickListener {
 
     private HomeViewModel viewModel;
     private RoomAdapter roomAdapter;
 
+    private TextView tvHomeUserName;
+    private View layoutHomeUserId;
+    private TextView tvHomeUserIdTag;
     private TextView tvTotalBalance;
+    private ImageButton btnToggleBalanceVisibility;
+    private MaterialButton btnHomeDepositWithdraw;
     private TextView tvRoomCountSubtitle;
     private ImageView ivHomeAvatar;
     private TextView tvHomeAvatarInitials;
     private TextView tvTotalRoomBalanceMini;
-    private MaterialButton btnHomeDeposit;
     private TextView tvRoomCountBadge;
+    private EditText etHomeSearchRooms;
+    private ImageButton btnClearSearch;
+    private final List<Room> allRoomsList = new ArrayList<>();
+    private MaterialButton btnWalletHistory;
     private MaterialButton btnCreateRoom;
     private MaterialButton btnJoinRoom;
     private MaterialButton btnEmptyCreateRoom;
@@ -68,12 +79,17 @@ public class HomeFragment extends Fragment implements RoomAdapter.OnRoomClickLis
     private MaterialButton btnRetryRooms;
     private ProgressBar pbLoading;
 
+    private static final String PREFS_NAME = "shared_fund_prefs";
+    private static final String KEY_BALANCE_HIDDEN = "key_balance_hidden";
+    private boolean isBalanceHidden = false;
+    private double currentWalletBalance = 0.0;
+
     private View btnUserProfile;
     private View accountDrawerScrim;
     private LinearLayout accountDrawer;
     private TextView tvDrawerUserName;
     private TextView tvDrawerUserEmail;
-    private TextView tvDrawerThemeValue;
+    private com.google.android.material.materialswitch.MaterialSwitch switchDrawerTheme;
     private OnBackPressedCallback drawerBackCallback;
 
     @Nullable
@@ -86,16 +102,17 @@ public class HomeFragment extends Fragment implements RoomAdapter.OnRoomClickLis
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
 
-        // Đảm bảo RoomRepository đồng bộ đúng tài khoản đang đăng nhập
-        com.sharedfund.app.data.UserSessionManager session = com.sharedfund.app.data.UserSessionManager.getInstance(requireContext());
+        UserSessionManager session = UserSessionManager.getInstance(requireContext());
         if (session.isLoggedIn()) {
-            com.sharedfund.app.data.RoomRepository.getInstance().setCurrentUser(session.getUserId(), session.getFullName());
+            RoomRepository.getInstance().setCurrentUser(session.getUserId(), session.getFullName());
         }
 
         initViews(view);
         setupRecyclerView();
         setupViewModel();
         setupClickListeners();
+        updateUserProfileHeader();
+        renderWalletBalance();
         drawerBackCallback = new OnBackPressedCallback(false) {
             @Override public void handleOnBackPressed() { hideAccountDrawer(); }
         };
@@ -105,7 +122,20 @@ public class HomeFragment extends Fragment implements RoomAdapter.OnRoomClickLis
     @Override
     public void onResume() {
         super.onResume();
-        updateHomeAvatar();
+        if (getActivity() != null && getActivity().getWindow() != null) {
+            boolean isDark = false;
+            if (getActivity() instanceof com.sharedfund.app.MainActivity) {
+                isDark = ((com.sharedfund.app.MainActivity) getActivity()).isDarkTheme();
+            }
+            androidx.core.view.WindowInsetsControllerCompat controller =
+                    androidx.core.view.WindowCompat.getInsetsController(
+                            getActivity().getWindow(), getActivity().getWindow().getDecorView());
+            if (controller != null) {
+                controller.setAppearanceLightStatusBars(!isDark);
+            }
+        }
+        updateUserProfileHeader();
+        renderWalletBalance();
         if (viewModel != null) {
             viewModel.refreshWalletBalance();
             Double roomTotal = viewModel.getTotalRoomBalance().getValue();
@@ -122,14 +152,21 @@ public class HomeFragment extends Fragment implements RoomAdapter.OnRoomClickLis
         accountDrawer = view.findViewById(R.id.accountDrawer);
         tvDrawerUserName = view.findViewById(R.id.tvDrawerUserName);
         tvDrawerUserEmail = view.findViewById(R.id.tvDrawerUserEmail);
-        tvDrawerThemeValue = view.findViewById(R.id.tvDrawerThemeValue);
+        switchDrawerTheme = view.findViewById(R.id.switchDrawerTheme);
+        tvHomeUserName = view.findViewById(R.id.tvHomeUserName);
+        layoutHomeUserId = view.findViewById(R.id.layoutHomeUserId);
+        tvHomeUserIdTag = view.findViewById(R.id.tvHomeUserIdTag);
         tvTotalBalance = view.findViewById(R.id.tvTotalBalance);
+        btnToggleBalanceVisibility = view.findViewById(R.id.btnToggleBalanceVisibility);
+        btnHomeDepositWithdraw = view.findViewById(R.id.btnHomeDepositWithdraw);
         ivHomeAvatar = view.findViewById(R.id.ivHomeAvatar);
         tvHomeAvatarInitials = view.findViewById(R.id.tvHomeAvatarInitials);
         tvRoomCountSubtitle = view.findViewById(R.id.tvRoomCountSubtitle);
         tvTotalRoomBalanceMini = view.findViewById(R.id.tvTotalRoomBalanceMini);
-        btnHomeDeposit = view.findViewById(R.id.btnHomeDeposit);
         tvRoomCountBadge = view.findViewById(R.id.tvRoomCountBadge);
+        etHomeSearchRooms = view.findViewById(R.id.etHomeSearchRooms);
+        btnClearSearch = view.findViewById(R.id.btnClearSearch);
+        btnWalletHistory = view.findViewById(R.id.btnWalletHistory);
         btnCreateRoom = view.findViewById(R.id.btnCreateRoom);
         btnJoinRoom = view.findViewById(R.id.btnJoinRoom);
         btnEmptyCreateRoom = view.findViewById(R.id.btnEmptyCreateRoom);
@@ -140,12 +177,69 @@ public class HomeFragment extends Fragment implements RoomAdapter.OnRoomClickLis
         btnRetryRooms = view.findViewById(R.id.btnRetryRooms);
         pbLoading = view.findViewById(R.id.pbLoading);
 
+        if (getContext() != null) {
+            isBalanceHidden = requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .getBoolean(KEY_BALANCE_HIDDEN, false);
+        }
+    }
+
+    private String formatAccountNumber(String name, String userId) {
+        if ("DO QUOC TRUNG".equalsIgnoreCase(name)) {
+            return "1047061615";
+        }
+        if (userId == null || userId.trim().isEmpty()) {
+            return "1047061615";
+        }
+        long hash = Math.abs((long) userId.hashCode());
+        long num = 1000000000L + (hash % 9000000000L);
+        return String.valueOf(num);
+    }
+
+    private void updateUserProfileHeader() {
+        if (getContext() == null) return;
+        UserSessionManager session = UserSessionManager.getInstance(requireContext());
+        String name = session.getCurrentUserName();
+        if (tvHomeUserName != null) {
+            tvHomeUserName.setText(name != null && !name.trim().isEmpty() ? name : "Người dùng");
+        }
+        String userId = session.getUserId();
+        if (tvHomeUserIdTag != null) {
+            final String stk = formatAccountNumber(name != null ? name.trim() : "", userId);
+            tvHomeUserIdTag.setText(stk);
+            if (layoutHomeUserId != null) {
+                layoutHomeUserId.setOnClickListener(v -> {
+                    ClipboardManager clipboard = (ClipboardManager) requireContext().getSystemService(Context.CLIPBOARD_SERVICE);
+                    ClipData clip = ClipData.newPlainText("Số tài khoản", stk);
+                    if (clipboard != null) {
+                        clipboard.setPrimaryClip(clip);
+                        AppToaster.info(requireActivity(), "Đã sao chép số tài khoản: " + stk);
+                    }
+                });
+            }
+        }
+        updateHomeAvatar();
+    }
+
+    private void renderWalletBalance() {
+        if (tvTotalBalance == null || getContext() == null) return;
+        if (isBalanceHidden) {
+            tvTotalBalance.setText("•••••• ₫");
+            if (btnToggleBalanceVisibility != null) {
+                btnToggleBalanceVisibility.setImageResource(R.drawable.ic_visibility_off);
+            }
+        } else {
+            DecimalFormat df = new DecimalFormat("#,###");
+            String formatted = df.format(currentWalletBalance).replace(',', '.') + " ₫";
+            tvTotalBalance.setText(formatted);
+            if (btnToggleBalanceVisibility != null) {
+                btnToggleBalanceVisibility.setImageResource(R.drawable.ic_visibility);
+            }
+        }
     }
 
     private void updateHomeAvatar() {
         if (ivHomeAvatar == null || getContext() == null) return;
-        com.sharedfund.app.data.UserSessionManager session =
-                com.sharedfund.app.data.UserSessionManager.getInstance(requireContext());
+        UserSessionManager session = UserSessionManager.getInstance(requireContext());
         String name = session.getCurrentUserName();
         if (name == null || name.trim().isEmpty()) {
             tvHomeAvatarInitials.setText("U");
@@ -154,7 +248,7 @@ public class HomeFragment extends Fragment implements RoomAdapter.OnRoomClickLis
             String initials = parts.length > 1
                     ? ("" + parts[0].charAt(0) + parts[parts.length - 1].charAt(0))
                     : String.valueOf(parts[0].charAt(0));
-            tvHomeAvatarInitials.setText(initials.toUpperCase(java.util.Locale.ROOT));
+            tvHomeAvatarInitials.setText(initials.toUpperCase(Locale.ROOT));
         }
         tvHomeAvatarInitials.setVisibility(View.VISIBLE);
         AvatarImageLoader.load(ivHomeAvatar, tvHomeAvatarInitials, session.getAvatarUrl());
@@ -168,48 +262,38 @@ public class HomeFragment extends Fragment implements RoomAdapter.OnRoomClickLis
 
     private void setupViewModel() {
         viewModel = new ViewModelProvider(this).get(HomeViewModel.class);
-        com.sharedfund.app.data.UserSessionManager activeSession =
-                com.sharedfund.app.data.UserSessionManager.getInstance(requireContext());
+        UserSessionManager activeSession = UserSessionManager.getInstance(requireContext());
         if (activeSession.isLoggedIn()) {
             viewModel.configureSupabase(activeSession.getUserId(), activeSession.getFullName(),
                     activeSession.getAccessToken());
         }
 
-        // Quan sát danh sách quỹ
         viewModel.getRooms().observe(getViewLifecycleOwner(), new Observer<List<Room>>() {
             @Override
             public void onChanged(List<Room> rooms) {
-                roomAdapter.setRooms(rooms);
+                allRoomsList.clear();
+                if (rooms != null) {
+                    allRoomsList.addAll(rooms);
+                }
                 if (layoutErrorState != null) {
                     layoutErrorState.setVisibility(View.GONE);
                 }
-                if (rooms == null || rooms.isEmpty()) {
-                    layoutEmptyState.setVisibility(View.VISIBLE);
-                    rvRooms.setVisibility(View.GONE);
-                    tvRoomCountBadge.setText("0 quỹ");
-                    tvRoomCountSubtitle.setText("0 quỹ hoạt động");
-                } else {
-                    layoutEmptyState.setVisibility(View.GONE);
-                    rvRooms.setVisibility(View.VISIBLE);
-                    tvRoomCountBadge.setText(rooms.size() + " quỹ");
-                    tvRoomCountSubtitle.setText(rooms.size() + " quỹ hoạt động");
-                }
+                String query = etHomeSearchRooms != null && etHomeSearchRooms.getText() != null
+                        ? etHomeSearchRooms.getText().toString() : "";
+                filterRooms(query);
             }
         });
 
-        // Ví cá nhân hiển thị chính; tổng quỹ nhóm được hiển thị riêng ở mini stat.
         viewModel.getPersonalWalletBalance().observe(getViewLifecycleOwner(), new Observer<Double>() {
             @Override
             public void onChanged(Double walletBalance) {
-                if (walletBalance != null && tvTotalBalance != null) {
-                    DecimalFormat df = new DecimalFormat("#,###");
-                    String formatted = df.format(walletBalance).replace(',', '.') + " ₫";
-                    tvTotalBalance.setText(formatted);
+                if (walletBalance != null) {
+                    currentWalletBalance = walletBalance;
+                    renderWalletBalance();
                 }
             }
         });
 
-        // 2. Quan sát tổng số dư các quỹ phòng (hiển thị ở góc phải mini stat)
         viewModel.getTotalRoomBalance().observe(getViewLifecycleOwner(), new Observer<Double>() {
             @Override
             public void onChanged(Double roomTotal) {
@@ -221,7 +305,6 @@ public class HomeFragment extends Fragment implements RoomAdapter.OnRoomClickLis
             }
         });
 
-        // Trạng thái tải
         viewModel.getIsLoading().observe(getViewLifecycleOwner(), new Observer<Boolean>() {
             @Override
             public void onChanged(Boolean loading) {
@@ -229,7 +312,6 @@ public class HomeFragment extends Fragment implements RoomAdapter.OnRoomClickLis
             }
         });
 
-        // Thông báo kết quả thao tác
         viewModel.getActionMessage().observe(getViewLifecycleOwner(), new Observer<String>() {
             @Override
             public void onChanged(String msg) {
@@ -240,8 +322,10 @@ public class HomeFragment extends Fragment implements RoomAdapter.OnRoomClickLis
                                 .setMessage(msg)
                                 .setPositiveButton("Đóng", null)
                                 .show();
+                    } else if (msg.toLowerCase().contains("thất bại") || msg.toLowerCase().contains("lỗi")) {
+                        AppToaster.error(requireActivity(), msg);
                     } else {
-                        Toast.makeText(requireContext(), msg, Toast.LENGTH_SHORT).show();
+                        AppToaster.success(requireActivity(), msg);
                     }
                 }
             }
@@ -249,12 +333,35 @@ public class HomeFragment extends Fragment implements RoomAdapter.OnRoomClickLis
     }
 
     private void setupClickListeners() {
-        if (btnHomeDeposit != null) {
-            btnHomeDeposit.setVisibility(View.VISIBLE);
-            btnHomeDeposit.setOnClickListener(v -> {
-                DepositDialogFragment dialog = DepositDialogFragment.newWalletInstance();
-                dialog.setOnDepositCompleteListener(amount -> viewModel.refreshWalletBalance());
-                dialog.show(getChildFragmentManager(), "wallet_deposit_dialog");
+        if (btnToggleBalanceVisibility != null) {
+            btnToggleBalanceVisibility.setOnClickListener(v -> {
+                isBalanceHidden = !isBalanceHidden;
+                if (getContext() != null) {
+                    requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                            .edit()
+                            .putBoolean(KEY_BALANCE_HIDDEN, isBalanceHidden)
+                            .apply();
+                }
+                renderWalletBalance();
+            });
+        }
+
+        if (btnHomeDepositWithdraw != null) {
+            btnHomeDepositWithdraw.setOnClickListener(v -> {
+                if (getActivity() instanceof com.sharedfund.app.MainActivity) {
+                    ((com.sharedfund.app.MainActivity) getActivity()).openWalletTransfer();
+                }
+            });
+        }
+
+        if (btnWalletHistory != null) {
+            btnWalletHistory.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    if (getActivity() instanceof com.sharedfund.app.MainActivity) {
+                        ((com.sharedfund.app.MainActivity) getActivity()).openWalletTransactions();
+                    }
+                }
             });
         }
 
@@ -286,10 +393,7 @@ public class HomeFragment extends Fragment implements RoomAdapter.OnRoomClickLis
                 @Override
                 public void onClick(View v) {
                     layoutErrorState.setVisibility(View.GONE);
-                    pbLoading.setVisibility(View.VISIBLE);
-                    // Trigger refresh
-                    rvRooms.setVisibility(View.VISIBLE);
-                    pbLoading.setVisibility(View.GONE);
+                    viewModel.loadRemoteData();
                 }
             });
         }
@@ -303,8 +407,69 @@ public class HomeFragment extends Fragment implements RoomAdapter.OnRoomClickLis
             hideAccountDrawer();
             if (getActivity() instanceof MainActivity) ((MainActivity) getActivity()).openProfile();
         });
-        viewClick(R.id.btnDrawerTheme, v -> showThemeChooser());
+        if (switchDrawerTheme != null) {
+            switchDrawerTheme.setOnCheckedChangeListener((btn, isChecked) -> {
+                if (getActivity() instanceof MainActivity) {
+                    ((MainActivity) getActivity()).setDarkTheme(isChecked);
+                }
+            });
+        }
         viewClick(R.id.btnDrawerLogout, v -> confirmDrawerLogout());
+
+        if (etHomeSearchRooms != null) {
+            etHomeSearchRooms.addTextChangedListener(new TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+                @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+                    filterRooms(s != null ? s.toString() : "");
+                }
+                @Override public void afterTextChanged(Editable s) {}
+            });
+        }
+        if (btnClearSearch != null) {
+            btnClearSearch.setOnClickListener(v -> {
+                if (etHomeSearchRooms != null) {
+                    etHomeSearchRooms.setText("");
+                }
+            });
+        }
+    }
+
+    private void filterRooms(String query) {
+        if (query == null || query.trim().isEmpty()) {
+            if (btnClearSearch != null) btnClearSearch.setVisibility(View.GONE);
+            roomAdapter.setRooms(allRoomsList);
+            if (btnEmptyCreateRoom != null) btnEmptyCreateRoom.setVisibility(View.VISIBLE);
+            if (allRoomsList.isEmpty()) {
+                layoutEmptyState.setVisibility(View.VISIBLE);
+                rvRooms.setVisibility(View.GONE);
+                tvRoomCountBadge.setText("0 quỹ");
+                tvRoomCountSubtitle.setText("0 quỹ hoạt động");
+            } else {
+                layoutEmptyState.setVisibility(View.GONE);
+                rvRooms.setVisibility(View.VISIBLE);
+                tvRoomCountBadge.setText(allRoomsList.size() + " quỹ");
+                tvRoomCountSubtitle.setText(allRoomsList.size() + " quỹ hoạt động");
+            }
+            return;
+        }
+
+        if (btnClearSearch != null) btnClearSearch.setVisibility(View.VISIBLE);
+        List<Room> filtered = com.sharedfund.app.data.SearchHelper.filterRooms(allRoomsList, query);
+
+        roomAdapter.setRooms(filtered);
+        if (filtered.isEmpty()) {
+            layoutEmptyState.setVisibility(View.VISIBLE);
+            rvRooms.setVisibility(View.GONE);
+            if (btnEmptyCreateRoom != null) btnEmptyCreateRoom.setVisibility(View.GONE);
+            tvRoomCountBadge.setText("0 quỹ");
+            tvRoomCountSubtitle.setText("0/" + allRoomsList.size() + " quỹ khớp");
+        } else {
+            layoutEmptyState.setVisibility(View.GONE);
+            rvRooms.setVisibility(View.VISIBLE);
+            if (btnEmptyCreateRoom != null) btnEmptyCreateRoom.setVisibility(View.VISIBLE);
+            tvRoomCountBadge.setText(filtered.size() + " quỹ");
+            tvRoomCountSubtitle.setText(filtered.size() + "/" + allRoomsList.size() + " quỹ khớp");
+        }
     }
 
     private interface DrawerAction { void run(View view); }
@@ -321,7 +486,7 @@ public class HomeFragment extends Fragment implements RoomAdapter.OnRoomClickLis
         tvDrawerUserName.setText(session.getCurrentUserName());
         tvDrawerUserEmail.setText(session.getCurrentUserEmail());
         if (getActivity() instanceof MainActivity) {
-            tvDrawerThemeValue.setText(((MainActivity) getActivity()).isDarkTheme() ? "Tối" : "Sáng");
+            if (switchDrawerTheme != null) switchDrawerTheme.setChecked(((MainActivity) getActivity()).isDarkTheme());
         }
         accountDrawerScrim.setVisibility(View.VISIBLE);
         accountDrawerScrim.setAlpha(0f);
@@ -350,20 +515,7 @@ public class HomeFragment extends Fragment implements RoomAdapter.OnRoomClickLis
         if (drawerBackCallback != null) drawerBackCallback.setEnabled(false);
     }
 
-    private void showThemeChooser() {
-        boolean dark = getActivity() instanceof MainActivity && ((MainActivity) getActivity()).isDarkTheme();
-        new MaterialAlertDialogBuilder(requireContext())
-                .setTitle("Chỉnh theme")
-                .setSingleChoiceItems(new String[]{"Sáng", "Tối"}, dark ? 1 : 0, (dialog, which) -> {
-                    dialog.dismiss();
-                    hideAccountDrawer();
-                    if (getActivity() instanceof MainActivity) {
-                        ((MainActivity) getActivity()).setDarkTheme(which == 1);
-                    }
-                })
-                .setNegativeButton("Hủy", null)
-                .show();
-    }
+    
 
     private void confirmDrawerLogout() {
         new MaterialAlertDialogBuilder(requireContext())
@@ -374,7 +526,7 @@ public class HomeFragment extends Fragment implements RoomAdapter.OnRoomClickLis
                     com.sharedfund.app.data.UserSessionManager.getInstance(requireContext()).clearSession();
                     com.sharedfund.app.data.RoomRepository.getInstance().setCurrentUser("", "");
                     hideAccountDrawer();
-                    Toast.makeText(requireContext(), "Đã đăng xuất!", Toast.LENGTH_SHORT).show();
+                    AppToaster.info(requireActivity(), "Đã đăng xuất!");
                     if (getActivity() instanceof MainActivity) ((MainActivity) getActivity()).openLogin();
                 })
                 .show();
@@ -393,7 +545,7 @@ public class HomeFragment extends Fragment implements RoomAdapter.OnRoomClickLis
         ClipData clip = ClipData.newPlainText("Join Code", room.getJoinCode());
         if (clipboard != null) {
             clipboard.setPrimaryClip(clip);
-            Toast.makeText(requireContext(), getString(R.string.copied_code) + " (" + room.getJoinCode() + ")", Toast.LENGTH_SHORT).show();
+            AppToaster.info(requireActivity(), getString(R.string.copied_code) + " (" + room.getJoinCode() + ")");
         }
     }
 
@@ -403,6 +555,8 @@ public class HomeFragment extends Fragment implements RoomAdapter.OnRoomClickLis
         final TextInputEditText etRoomName = dialogView.findViewById(R.id.etDialogRoomName);
         final TextInputLayout tilRoomDesc = dialogView.findViewById(R.id.tilDialogRoomDesc);
         final TextInputEditText etRoomDesc = dialogView.findViewById(R.id.etDialogRoomDesc);
+        final TextInputLayout tilRoomTarget = dialogView.findViewById(R.id.tilDialogRoomTarget);
+        final TextInputEditText etRoomTarget = dialogView.findViewById(R.id.etDialogRoomTarget);
 
         etRoomName.addTextChangedListener(new TextWatcher() {
             @Override
@@ -419,27 +573,79 @@ public class HomeFragment extends Fragment implements RoomAdapter.OnRoomClickLis
             public void afterTextChanged(Editable s) {}
         });
 
+        if (etRoomTarget != null) {
+            etRoomTarget.addTextChangedListener(new TextWatcher() {
+                private boolean isFormatting = false;
+                private final DecimalFormat formatter;
+                {
+                    DecimalFormatSymbols symbols = new DecimalFormatSymbols(Locale.US);
+                    symbols.setGroupingSeparator('.');
+                    formatter = new DecimalFormat("#,##0", symbols);
+                }
+
+                @Override
+                public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+
+                @Override
+                public void onTextChanged(CharSequence s, int start, int before, int count) {}
+
+                @Override
+                public void afterTextChanged(Editable s) {
+                    if (isFormatting || s == null) return;
+                    isFormatting = true;
+                    String raw = s.toString().replaceAll("[^0-9]", "");
+                    if (!raw.isEmpty()) {
+                        try {
+                            long val = Long.parseLong(raw);
+                            String formatted = formatter.format(val);
+                            if (!formatted.equals(s.toString())) {
+                                s.replace(0, s.length(), formatted);
+                                etRoomTarget.setSelection(s.length());
+                            }
+                        } catch (NumberFormatException ignored) {}
+                    }
+                    isFormatting = false;
+                }
+            });
+        }
+
+        final MaterialButton btnCancel = dialogView.findViewById(R.id.btnCancelCreateRoom);
+        final MaterialButton btnConfirm = dialogView.findViewById(R.id.btnConfirmCreateRoom);
+
         final AlertDialog dialog = new MaterialAlertDialogBuilder(requireContext())
                 .setView(dialogView)
-                .setPositiveButton(R.string.btn_confirm, null) // Sẽ ghi đè listener để chặn auto-dismiss khi có lỗi
-                .setNegativeButton(R.string.btn_cancel, null)
+                .setCancelable(true)
                 .create();
 
-        dialog.setOnShowListener(d -> {
-            Button positiveBtn = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
-            positiveBtn.setOnClickListener(v -> {
+        if (btnCancel != null) {
+            btnCancel.setOnClickListener(v -> dialog.dismiss());
+        }
+
+        if (btnConfirm != null) {
+            btnConfirm.setOnClickListener(v -> {
                 String name = etRoomName.getText() != null ? etRoomName.getText().toString().trim() : "";
-                String desc = etRoomDesc.getText() != null ? etRoomDesc.getText().toString().trim() : "";
+                String desc = etRoomDesc != null && etRoomDesc.getText() != null ? etRoomDesc.getText().toString().trim() : "";
+                String targetStr = etRoomTarget != null && etRoomTarget.getText() != null ? etRoomTarget.getText().toString().trim() : "";
 
                 if (name.isEmpty()) {
                     tilRoomName.setError("Tên quỹ không được để trống!");
                     return;
                 }
 
-                viewModel.createRoom(name, desc);
+                double targetAmount = 0.0;
+                if (!targetStr.isEmpty()) {
+                    String cleanDigits = targetStr.replaceAll("[^0-9]", "");
+                    if (!cleanDigits.isEmpty()) {
+                        try {
+                            targetAmount = Double.parseDouble(cleanDigits);
+                        } catch (NumberFormatException ignored) {}
+                    }
+                }
+
+                viewModel.createRoom(name, desc, targetAmount);
                 dialog.dismiss();
             });
-        });
+        }
 
         dialog.show();
     }
@@ -464,15 +670,20 @@ public class HomeFragment extends Fragment implements RoomAdapter.OnRoomClickLis
             public void afterTextChanged(Editable s) {}
         });
 
+        final View btnCancel = dialogView.findViewById(R.id.btnCancelJoinRoom);
+        final View btnConfirm = dialogView.findViewById(R.id.btnConfirmJoinRoom);
+
         final AlertDialog dialog = new MaterialAlertDialogBuilder(requireContext())
                 .setView(dialogView)
-                .setPositiveButton(R.string.btn_confirm, null)
-                .setNegativeButton(R.string.btn_cancel, null)
+                .setCancelable(true)
                 .create();
 
-        dialog.setOnShowListener(d -> {
-            Button positiveBtn = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
-            positiveBtn.setOnClickListener(v -> {
+        if (btnCancel != null) {
+            btnCancel.setOnClickListener(v -> dialog.dismiss());
+        }
+
+        if (btnConfirm != null) {
+            btnConfirm.setOnClickListener(v -> {
                 String code = etJoinCode.getText() != null ? etJoinCode.getText().toString().trim() : "";
 
                 if (code.isEmpty()) {
@@ -483,7 +694,7 @@ public class HomeFragment extends Fragment implements RoomAdapter.OnRoomClickLis
                 viewModel.joinRoom(code);
                 dialog.dismiss();
             });
-        });
+        }
 
         dialog.show();
     }

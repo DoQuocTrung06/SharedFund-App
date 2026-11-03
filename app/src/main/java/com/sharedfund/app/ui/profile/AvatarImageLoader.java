@@ -13,17 +13,19 @@ import okhttp3.Callback;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
+import com.sharedfund.app.data.SafeDns;
 
-/** Small dependency-free loader for profile images stored in Supabase Storage or supplied by URL. */
 public final class AvatarImageLoader {
     private static final long MAX_AVATAR_BYTES = 5L * 1024L * 1024L;
-    private static final OkHttpClient CLIENT = new OkHttpClient();
+    private static final OkHttpClient CLIENT = new OkHttpClient.Builder()
+            .dns(SafeDns.getInstance())
+            .build();
 
     private AvatarImageLoader() {}
 
     public static void load(ImageView imageView, TextView initials, String url) {
         if (url == null || url.trim().isEmpty()) {
-            initials.setVisibility(View.VISIBLE);
+            if (initials != null) initials.setVisibility(View.VISIBLE);
             imageView.setImageDrawable(null);
             return;
         }
@@ -48,7 +50,7 @@ public final class AvatarImageLoader {
                 imageView.post(() -> {
                     if (!requestedUrl.equals(imageView.getTag())) return;
                     imageView.setImageBitmap(bitmap);
-                    initials.setVisibility(View.GONE);
+                    if (initials != null) initials.setVisibility(View.GONE);
                 });
             }
         });

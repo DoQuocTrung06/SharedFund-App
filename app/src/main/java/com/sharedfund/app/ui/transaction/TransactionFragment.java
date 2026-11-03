@@ -11,6 +11,7 @@ import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
+import com.sharedfund.app.ui.widget.AppToaster;
 import android.widget.EditText;
 import android.text.InputType;
 import android.app.AlertDialog;
@@ -33,11 +34,6 @@ import com.sharedfund.app.model.Transaction;
 
 import java.util.List;
 
-/**
- * Màn hình Lịch sử giao dịch (TransactionFragment)
- * Quản lý danh sách giao dịch, bộ lọc Thu/Chi/Tất cả, trạng thái tải, lỗi và danh sách trống.
- * Phản hồi cảm ứng mượt mà (ripple effect), cuộn danh sách độc lập, hỗ trợ cập nhật dữ liệu tức thì.
- */
 public class TransactionFragment extends Fragment implements TransactionAdapter.OnTransactionClickListener {
 
     private static final String ARG_ROOM_ID = "arg_room_id";
@@ -119,10 +115,9 @@ public class TransactionFragment extends Fragment implements TransactionAdapter.
 
     private void setupViewModel() {
         viewModel = new ViewModelProvider(this).get(TransactionViewModel.class);
-        viewModel.setAccessToken(com.sharedfund.app.data.UserSessionManager.getInstance(requireContext()).getAccessToken());
+        viewModel.setAccessToken(UserSessionManager.getInstance(requireContext()).getAccessToken());
         viewModel.setRoomId(roomId);
 
-        // Quan sát danh sách giao dịch đã lọc
         viewModel.getTransactions().observe(getViewLifecycleOwner(), new Observer<List<Transaction>>() {
             @Override
             public void onChanged(List<Transaction> transactions) {
@@ -141,7 +136,6 @@ public class TransactionFragment extends Fragment implements TransactionAdapter.
             }
         });
 
-        // Quan sát trạng thái tải
         viewModel.getIsLoading().observe(getViewLifecycleOwner(), new Observer<Boolean>() {
             @Override
             public void onChanged(Boolean loading) {
@@ -151,7 +145,6 @@ public class TransactionFragment extends Fragment implements TransactionAdapter.
             }
         });
 
-        // Quan sát thông báo lỗi
         viewModel.getErrorMessage().observe(getViewLifecycleOwner(), new Observer<String>() {
             @Override
             public void onChanged(String err) {
@@ -162,7 +155,20 @@ public class TransactionFragment extends Fragment implements TransactionAdapter.
                         layoutTxEmptyState.setVisibility(View.GONE);
                         rvTransactions.setVisibility(View.GONE);
                     } else {
-                        Toast.makeText(requireContext(), err, Toast.LENGTH_SHORT).show();
+                        AppToaster.error(requireActivity(), err);
+                    }
+                }
+            }
+        });
+
+        viewModel.getActionMessage().observe(getViewLifecycleOwner(), new Observer<String>() {
+            @Override
+            public void onChanged(String msg) {
+                if (msg != null && !msg.isEmpty()) {
+                    if (msg.toLowerCase().contains("thất bại") || msg.toLowerCase().contains("lỗi")) {
+                        AppToaster.error(requireActivity(), msg);
+                    } else {
+                        AppToaster.success(requireActivity(), msg);
                     }
                 }
             }
@@ -212,9 +218,6 @@ public class TransactionFragment extends Fragment implements TransactionAdapter.
         }
     }
 
-    /**
-     * Cập nhật màu sắc nút bộ lọc giữ nguyên hiệu ứng chạm (ripple) và viền bo tròn của MaterialButton
-     */
     private void updateFilterUI(TransactionViewModel.FilterType filter) {
         int primaryColor = ContextCompat.getColor(requireContext(), R.color.primary);
         int transparentColor = Color.TRANSPARENT;
@@ -238,77 +241,21 @@ public class TransactionFragment extends Fragment implements TransactionAdapter.
     @Override
     public void onTransactionClick(Transaction transaction) {
         if (transaction == null) return;
-        if ("PENDING".equalsIgnoreCase(transaction.getStatus()) && isCurrentUserOwner()) {
-            showWithdrawalReviewDialog(transaction);
-            return;
-        }
-        String message = transaction.getNote() + " (" + transaction.getFormattedAmount() + ")";
-        if (transaction.getStatus() != null) message += "\nTrạng thái: " + transaction.getStatus();
-        if (transaction.getRejectionReason() != null && !transaction.getRejectionReason().trim().isEmpty())
-            message += "\nLý do từ chối: " + transaction.getRejectionReason();
-        new AlertDialog.Builder(requireContext()).setMessage(message).setPositiveButton("Đóng", null).show();
-    }
+        boolean isAdmin = RoomRepository.getInstance().isCurrentUserAdmin(roomId);
+        TransactionDetailBottomSheet sheet = TransactionDetailBottomSheet.newInstance(transaction, isAdmin);
+        sheet.setActionListener(new TransactionDetailBottomSheet.OnTransactionActionListener() {
+            @Override
+            public void onApprove(Transaction tx) {
+                String adminId = RoomRepository.getInstance().getCurrentUserId();
+                viewModel.approveExpense(adminId, tx.getId());
+            }
 
-    private boolean isCurrentUserOwner() {
-        com.sharedfund.app.model.Room room = RoomRepository.getInstance().getRoomSync(roomId);
-        if (room == null) return false;
-        String role = room.getCurrentUserRole();
-        if (role != null) return "ADMIN".equalsIgnoreCase(role) || "OWNER".equalsIgnoreCase(role);
-        String userId = UserSessionManager.getInstance(requireContext()).getUserId();
-        return userId != null && userId.equals(room.getCreatedBy());
-    }
-
-    private void showWithdrawalReviewDialog(Transaction transaction) {
-        EditText reasonInput = new EditText(requireContext());
-        reasonInput.setHint("Nhập lý do nếu từ chối");
-        reasonInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        int padding = (int) (20 * getResources().getDisplayMetrics().density);
-        reasonInput.setPadding(padding, padding, padding, padding);
-        new AlertDialog.Builder(requireContext())
-                .setTitle("Duyệt yêu cầu rút quỹ")
-                .setMessage(transaction.getCreatedBy() + " yêu cầu rút " + transaction.getFormattedAmount()
-                        + "\n" + transaction.getNote())
-                .setView(reasonInput)
-                .setNegativeButton("Từ chối", (dialog, which) -> {
-                    String reason = reasonInput.getText().toString().trim();
-                    if (reason.isEmpty()) {
-                        Toast.makeText(requireContext(), "Cần nhập lý do từ chối.", Toast.LENGTH_SHORT).show();
-                        showWithdrawalReviewDialog(transaction);
-                    } else reviewWithdrawal(transaction, false, reason);
-                })
-                .setPositiveButton("Duyệt", (dialog, which) -> reviewWithdrawal(transaction, true, null))
-                .setNeutralButton("Để sau", null)
-                .show();
-    }
-
-    private void reviewWithdrawal(Transaction transaction, boolean approve, String reason) {
-        String token = UserSessionManager.getInstance(requireContext()).getAccessToken();
-        TransactionRepository repository = new TransactionRepository();
-        repository.setAccessToken(token);
-        String adminUserId = UserSessionManager.getInstance(requireContext()).getUserId();
-        repository.reviewWithdrawal(adminUserId, transaction.getId(), approve, reason,
-                new TransactionRepository.DataCallback<com.google.gson.JsonObject>() {
-                    @Override public void onSuccess(com.google.gson.JsonObject result) {
-                        if (!isAdded()) return;
-                        requireActivity().runOnUiThread(() -> {
-                            transaction.setStatus(approve ? "APPROVED" : "REJECTED");
-                            transaction.setApprovedBy(adminUserId);
-                            transaction.setApprovedAt(java.time.Instant.now().toString());
-                            if (approve && result.has("new_room_balance")
-                                    && !result.get("new_room_balance").isJsonNull())
-                                transaction.setBalanceAfter(result.get("new_room_balance").getAsDouble());
-                            if (!approve) transaction.setRejectionReason(reason);
-                            RoomRepository.getInstance().onRemoteTransactionReceived(transaction);
-                            Toast.makeText(requireContext(), approve
-                                    ? "Đã duyệt. Tiền đã chuyển vào ví thành viên."
-                                    : "Đã từ chối yêu cầu rút quỹ.", Toast.LENGTH_LONG).show();
-                        });
-                    }
-                    @Override public void onError(String message) {
-                        if (!isAdded()) return;
-                        requireActivity().runOnUiThread(() -> Toast.makeText(requireContext(),
-                                "Không thể xử lý yêu cầu: " + message, Toast.LENGTH_LONG).show());
-                    }
-                });
+            @Override
+            public void onReject(Transaction tx, String reason) {
+                String adminId = RoomRepository.getInstance().getCurrentUserId();
+                viewModel.rejectExpense(adminId, tx.getId(), reason);
+            }
+        });
+        sheet.show(getChildFragmentManager(), "tx_detail");
     }
 }

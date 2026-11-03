@@ -3,6 +3,7 @@ package com.sharedfund.app.adapter;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ImageView;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
@@ -10,6 +11,7 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import com.sharedfund.app.R;
 import com.sharedfund.app.model.RoomMember;
+import com.sharedfund.app.ui.profile.AvatarImageLoader;
 
 import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
@@ -17,10 +19,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
-/**
- * Adapter hiển thị danh sách thành viên trong Dialog thành viên quỹ.
- * Mỗi item gồm: avatar initials, tên, badge Trưởng quỹ, số tiền đóng góp, % đóng góp.
- */
 public class MemberAdapter extends RecyclerView.Adapter<MemberAdapter.MemberViewHolder> {
 
     private List<RoomMember> members = new ArrayList<>();
@@ -28,7 +26,6 @@ public class MemberAdapter extends RecyclerView.Adapter<MemberAdapter.MemberView
 
     public void setMembers(List<RoomMember> members) {
         this.members = members != null ? members : new ArrayList<>();
-        // Tính tổng đóng góp để tính phần trăm
         totalContribution = 0;
         for (RoomMember m : this.members) {
             totalContribution += m.getContributedAmount();
@@ -56,6 +53,7 @@ public class MemberAdapter extends RecyclerView.Adapter<MemberAdapter.MemberView
     }
 
     static class MemberViewHolder extends RecyclerView.ViewHolder {
+        private final ImageView ivAvatar;
         private final TextView tvInitials;
         private final TextView tvName;
         private final TextView tvBadge;
@@ -66,6 +64,7 @@ public class MemberAdapter extends RecyclerView.Adapter<MemberAdapter.MemberView
 
         MemberViewHolder(@NonNull View itemView) {
             super(itemView);
+            ivAvatar = itemView.findViewById(R.id.ivMemberAvatar);
             tvInitials = itemView.findViewById(R.id.tvMemberInitials);
             tvName = itemView.findViewById(R.id.tvMemberName);
             tvBadge = itemView.findViewById(R.id.tvMemberBadge);
@@ -79,20 +78,22 @@ public class MemberAdapter extends RecyclerView.Adapter<MemberAdapter.MemberView
 
         void bind(RoomMember member, double totalContribution) {
             tvInitials.setText(member.getInitials());
+            tvInitials.setVisibility(View.VISIBLE);
+            if (ivAvatar != null) {
+                AvatarImageLoader.load(ivAvatar, tvInitials, member.getAvatarUrl());
+            }
             tvName.setText(member.getDisplayName());
 
-            // Badge Trưởng quỹ
             if (member.isAdmin()) {
                 tvBadge.setVisibility(View.VISIBLE);
+                tvBadge.setText("OWNER".equalsIgnoreCase(member.getRole()) ? "★ Trưởng quỹ" : "★ Quản trị");
             } else {
                 tvBadge.setVisibility(View.GONE);
             }
 
-            // Số tiền đóng góp
             String formattedAmount = df.format(member.getContributedAmount()) + " ₫";
-            tvContribution.setText("Đã đóng: " + formattedAmount);
+            tvContribution.setText("Đã góp: " + formattedAmount);
 
-            // Phần trăm đóng góp
             if (totalContribution > 0) {
                 double percent = (member.getContributedAmount() / totalContribution) * 100;
                 tvPercent.setText(String.format(Locale.getDefault(), "%.0f%%", percent));
