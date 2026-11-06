@@ -154,16 +154,49 @@ public class WalletStatementAdapter extends RecyclerView.Adapter<WalletStatement
                 TextView tvMbRowBalanceAfter = row.findViewById(R.id.tvMbRowBalanceAfter);
 
                 String title = tx.getNote();
-                if (title == null || title.trim().isEmpty()) {
-                    if ("Nạp ví SePay".equalsIgnoreCase(tx.getCategory())) {
-                        title = "Nạp tiền vào ví Koin";
-                    } else if ("Rút tiền".equalsIgnoreCase(tx.getCategory())) {
-                        title = "Rút tiền về ngân hàng";
-                    } else {
-                        title = tx.getCategory() != null ? tx.getCategory() : "Giao dịch";
+                if (mode == MODE_ROOM) {
+                    String rawCat = tx.getCategory() != null ? tx.getCategory().trim() : "";
+                    String rawNote = tx.getNote() != null ? tx.getNote().trim() : "";
+                    if (rawNote.contains("[STK:")) {
+                        int idx = rawNote.indexOf("[STK:");
+                        int endIdx = rawNote.indexOf("]", idx);
+                        String userNotePart = rawNote.substring(0, idx).trim();
+                        if (!userNotePart.isEmpty()) {
+                            title = userNotePart;
+                        } else if (endIdx > idx) {
+                            title = "Chuyển tiền (" + rawNote.substring(idx + 1, endIdx) + ")";
+                        } else {
+                            title = "Chuyển tiền ngân hàng";
+                        }
+                    } else if (rawNote.isEmpty() || rawNote.equalsIgnoreCase("Góp quỹ từ Ví Koin") || rawNote.equalsIgnoreCase("Rút quỹ về Ví Koin") || rawNote.equalsIgnoreCase("Rút tiền về Ví Koin")) {
+                        if (tx.isIncome()) {
+                            title = "Góp quỹ";
+                        } else if (!rawCat.isEmpty() && !rawCat.equalsIgnoreCase("Giao dịch") && !rawCat.equalsIgnoreCase("Khác")) {
+                            title = "Chi " + rawCat.toLowerCase();
+                        } else {
+                            title = "Chi tiêu quỹ";
+                        }
                     }
-                } else if (title.toUpperCase().startsWith("SF NAP")) {
-                    title = "Nạp tiền vào ví Koin";
+                } else {
+                    if (title == null || title.trim().isEmpty()) {
+                        if ("Nạp ví SePay".equalsIgnoreCase(tx.getCategory())) {
+                            title = "Nạp tiền vào ví Koin";
+                        } else if ("Rút tiền".equalsIgnoreCase(tx.getCategory())) {
+                            title = "Rút tiền về ngân hàng";
+                        } else if (tx.getRoomId() != null && !tx.getRoomId().trim().isEmpty()) {
+                            if (WalletTransactionsFragment.isWalletIncome(tx)) {
+                                title = "Rút quỹ về Ví Koin";
+                            } else {
+                                title = "Góp quỹ";
+                            }
+                        } else {
+                            title = tx.getCategory() != null ? tx.getCategory() : "Giao dịch";
+                        }
+                    } else if (title.toUpperCase().startsWith("SF NAP")) {
+                        title = "Nạp tiền vào ví Koin";
+                    } else if (title.toUpperCase().startsWith("SF RUT")) {
+                        title = "Rút quỹ về Ví Koin";
+                    }
                 }
                 tvMbRowTitle.setText(title);
 
@@ -183,18 +216,30 @@ public class WalletStatementAdapter extends RecyclerView.Adapter<WalletStatement
                 }
                 tvMbRowSubtitle.setText(sub);
 
-                tvMbRowAmount.setText(tx.getFormattedAmount());
-                if (tx.isIncome()) {
+                boolean isPositive;
+                if (mode == MODE_WALLET) {
+                    isPositive = WalletTransactionsFragment.isWalletIncome(tx);
+                } else {
+                    isPositive = tx.isIncome();
+                }
+                String amountStr = (isPositive ? "+" : "-") + df.format(tx.getAmount()) + " ₫";
+                tvMbRowAmount.setText(amountStr);
+                if (isPositive) {
                     tvMbRowAmount.setTextColor(ContextCompat.getColor(itemView.getContext(), R.color.accent_income));
                 } else {
                     tvMbRowAmount.setTextColor(ContextCompat.getColor(itemView.getContext(), R.color.text_primary));
                 }
 
-                if (tx.getBalanceAfter() > 0) {
+                if (mode == MODE_WALLET) {
                     tvMbRowBalanceAfter.setVisibility(View.VISIBLE);
                     tvMbRowBalanceAfter.setText("Số dư: " + df.format(tx.getBalanceAfter()) + " ₫");
                 } else {
-                    tvMbRowBalanceAfter.setVisibility(View.GONE);
+                    if (tx.getBalanceAfter() > 0) {
+                        tvMbRowBalanceAfter.setVisibility(View.VISIBLE);
+                        tvMbRowBalanceAfter.setText("Số dư: " + df.format(tx.getBalanceAfter()) + " ₫");
+                    } else {
+                        tvMbRowBalanceAfter.setVisibility(View.GONE);
+                    }
                 }
 
                 row.setOnClickListener(new View.OnClickListener() {

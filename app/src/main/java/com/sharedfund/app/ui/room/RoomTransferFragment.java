@@ -1,16 +1,12 @@
 package com.sharedfund.app.ui.room;
 
-import android.app.Dialog;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
-import android.graphics.Color;
-import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.Window;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.widget.ImageButton;
@@ -34,19 +30,22 @@ import com.google.android.material.card.MaterialCardView;
 import com.google.android.material.tabs.TabLayout;
 import com.google.android.material.textfield.TextInputEditText;
 import com.google.android.material.textfield.TextInputLayout;
-import com.google.gson.JsonObject;
 import com.google.zxing.BinaryBitmap;
 import com.google.zxing.MultiFormatReader;
 import com.google.zxing.RGBLuminanceSource;
 import com.google.zxing.Result;
 import com.google.zxing.common.HybridBinarizer;
+import com.google.zxing.common.GlobalHistogramBinarizer;
+import com.journeyapps.barcodescanner.ScanContract;
+import com.journeyapps.barcodescanner.ScanOptions;
 import com.sharedfund.app.R;
-import com.sharedfund.app.ui.widget.AppToaster;
 import com.sharedfund.app.data.RoomRepository;
 import com.sharedfund.app.data.TransactionRepository;
 import com.sharedfund.app.data.UserSessionManager;
 import com.sharedfund.app.ui.widget.CategoryChipHelper;
 import com.sharedfund.app.util.VietnameseCurrencyWords;
+import com.sharedfund.app.util.CopyToast;
+import com.sharedfund.app.util.ErrorMessageHelper;
 import com.sharedfund.app.model.Room;
 import com.sharedfund.app.model.ScannedQrPayment;
 import com.sharedfund.app.model.Transaction;
@@ -148,6 +147,9 @@ public class RoomTransferFragment extends Fragment {
     private DecimalFormat df;
 
     private ActivityResultLauncher<String> pickImageLauncher;
+    private ActivityResultLauncher<ScanOptions> cameraScanLauncher;
+    private View layoutQrEmptyPrompt;
+    private View layoutQrPaymentForm;
 
     public static RoomTransferFragment newInstance(String roomId, double roomBalance) {
         RoomTransferFragment sheet = new RoomTransferFragment();
@@ -176,6 +178,17 @@ public class RoomTransferFragment extends Fragment {
         pickImageLauncher = registerForActivityResult(new ActivityResultContracts.GetContent(), uri -> {
             if (uri != null) {
                 parseQrFromUri(uri);
+            }
+        });
+
+        cameraScanLauncher = registerForActivityResult(new ScanContract(), result -> {
+            if (result != null && result.getContents() != null) {
+                ScannedQrPayment parsed = ScannedQrPayment.parse(result.getContents());
+                if (parsed != null && parsed.accountNumber != null) {
+                    setScannedQrData(parsed);
+                } else {
+                    Toast.makeText(requireContext(), "Không tìm thấy thông tin chuyển khoản VietQR trong mã vừa quét", Toast.LENGTH_LONG).show();
+                }
             }
         });
     }
@@ -275,6 +288,8 @@ public class RoomTransferFragment extends Fragment {
 
         btnScanQrTransfer = view.findViewById(R.id.btnScanQrTransfer);
         btnPickQrImageTransfer = view.findViewById(R.id.btnPickQrImageTransfer);
+        layoutQrEmptyPrompt = view.findViewById(R.id.layoutQrEmptyPrompt);
+        layoutQrPaymentForm = view.findViewById(R.id.layoutQrPaymentForm);
         cardQrResult = view.findViewById(R.id.cardQrResult);
         tvQrResultDetails = view.findViewById(R.id.tvQrResultDetails);
         tilQrAmount = view.findViewById(R.id.tilQrAmount);
@@ -369,10 +384,13 @@ public class RoomTransferFragment extends Fragment {
                 layoutTransferQr.setVisibility(pos == 2 ? View.VISIBLE : View.GONE);
                 if (btnTransferSubmitUnified != null) {
                     if (pos == 0) {
+                        btnTransferSubmitUnified.setVisibility(View.VISIBLE);
                         btnTransferSubmitUnified.setText("Tiếp tục chuyển về Ví Koin");
                     } else if (pos == 1) {
+                        btnTransferSubmitUnified.setVisibility(View.VISIBLE);
                         btnTransferSubmitUnified.setText("Tiếp tục chuyển đến Ngân hàng");
                     } else {
+                        btnTransferSubmitUnified.setVisibility(pendingQr != null ? View.VISIBLE : View.GONE);
                         btnTransferSubmitUnified.setText("Tiếp tục thanh toán từ quỹ");
                     }
                 }
@@ -469,7 +487,16 @@ public class RoomTransferFragment extends Fragment {
 
     private void setupQrTransferSection() {
         btnScanQrTransfer.setOnClickListener(v -> {
-            if (listener != null) listener.onRequestQrScan();
+            ScanOptions options = new ScanOptions();
+            options.setDesiredBarcodeFormats(ScanOptions.QR_CODE);
+            options.setPrompt("Hướng camera về mã QR để thanh toán");
+            
+            options.setBeepEnabled(true);
+            options.setBarcodeImageEnabled(false);
+            options.setOrientationLocked(false);
+            if (cameraScanLauncher != null) {
+                cameraScanLauncher.launch(options);
+            }
         });
 
         btnPickQrImageTransfer.setOnClickListener(v -> {
@@ -477,21 +504,44 @@ public class RoomTransferFragment extends Fragment {
                 pickImageLauncher.launch("image/*");
             }
         });
-
     }
 
     private void parseQrFromUri(Uri imageUri) {
         try (InputStream inputStream = requireContext().getContentResolver().openInputStream(imageUri)) {
-            Bitmap bitmap = BitmapFactory.decodeStream(inputStream);
+            BitmapFactory.Options opts = new BitmapFactory.Options();
+            opts.inJustDecodeBounds = true;
+            BitmapFactory.decodeStream(inputStream, null, opts);
+            int maxDim = Math.max(opts.outWidth, opts.outHeight);
+            int inSampleSize = 1;
+            while (maxDim / inSampleSize > 1200) {
+                inSampleSize *= 2;
+            }
+            opts.inSampleSize = inSampleSize;
+            opts.inJustDecodeBounds = false;
+
+            Bitmap bitmap;
+            try (InputStream stream2 = requireContext().getContentResolver().openInputStream(imageUri)) {
+                bitmap = BitmapFactory.decodeStream(stream2, null, opts);
+            }
             if (bitmap == null) {
                 Toast.makeText(requireContext(), "Không thể mở ảnh mã QR", Toast.LENGTH_SHORT).show();
                 return;
             }
-            int[] intArray = new int[bitmap.getWidth() * bitmap.getHeight()];
-            bitmap.getPixels(intArray, 0, bitmap.getWidth(), 0, 0, bitmap.getWidth(), bitmap.getHeight());
-            RGBLuminanceSource source = new RGBLuminanceSource(bitmap.getWidth(), bitmap.getHeight(), intArray);
-            BinaryBitmap binaryBitmap = new BinaryBitmap(new HybridBinarizer(source));
-            Result result = new MultiFormatReader().decode(binaryBitmap);
+
+            int w = bitmap.getWidth();
+            int h = bitmap.getHeight();
+            int[] pixels = new int[w * h];
+            bitmap.getPixels(pixels, 0, w, 0, 0, w, h);
+            RGBLuminanceSource source = new RGBLuminanceSource(w, h, pixels);
+            Result result = null;
+            try {
+                result = new MultiFormatReader().decode(new BinaryBitmap(new HybridBinarizer(source)));
+            } catch (Exception ignored) {
+                try {
+                    result = new MultiFormatReader().decode(new BinaryBitmap(new GlobalHistogramBinarizer(source)));
+                } catch (Exception ignored2) {}
+            }
+
             if (result != null && result.getText() != null) {
                 ScannedQrPayment parsed = ScannedQrPayment.parse(result.getText());
                 if (parsed != null && parsed.accountNumber != null) {
@@ -499,6 +549,8 @@ public class RoomTransferFragment extends Fragment {
                 } else {
                     Toast.makeText(requireContext(), "Không tìm thấy thông tin chuyển khoản VietQR trong ảnh", Toast.LENGTH_LONG).show();
                 }
+            } else {
+                Toast.makeText(requireContext(), "Không quét được mã QR từ ảnh này", Toast.LENGTH_SHORT).show();
             }
         } catch (Exception e) {
             Toast.makeText(requireContext(), "Không quét được mã QR từ ảnh này", Toast.LENGTH_SHORT).show();
@@ -510,6 +562,12 @@ public class RoomTransferFragment extends Fragment {
         if (tabLayoutRoomTransfer != null && tabLayoutRoomTransfer.getTabCount() > 2) {
             TabLayout.Tab qrTab = tabLayoutRoomTransfer.getTabAt(2);
             if (qrTab != null) qrTab.select();
+        }
+        if (layoutQrEmptyPrompt != null) {
+            layoutQrEmptyPrompt.setVisibility(View.GONE);
+        }
+        if (layoutQrPaymentForm != null) {
+            layoutQrPaymentForm.setVisibility(View.VISIBLE);
         }
         if (cardQrResult != null && parsed != null) {
             cardQrResult.setVisibility(View.VISIBLE);
@@ -538,7 +596,33 @@ public class RoomTransferFragment extends Fragment {
             case "970407": return "Techcombank (970407)";
             case "970432": return "VPBank (970432)";
             case "970423": return "TPBank (970423)";
-            default: return "BIN " + bankBin.trim();
+            case "970416": return "ACB (970416)";
+            case "970405": return "Agribank (970405)";
+            case "970403": return "Sacombank (970403)";
+            case "970448": return "OCB (970448)";
+            case "970441": return "VIB (970441)";
+            case "970443": return "SHB (970443)";
+            case "970426": return "MSB (970426)";
+            case "970440": return "SeABank (970440)";
+            case "970437": return "HDBank (970437)";
+            case "970428": return "Nam A Bank (970428)";
+            case "970449": return "LPBank (970449)";
+            case "970431": return "Eximbank (970431)";
+            case "970454": return "BVBank (970454)";
+            case "970433": return "VietBank (970433)";
+            case "970419": return "NCB (970419)";
+            case "970429": return "SCB (970429)";
+            case "970438": return "BaoViet Bank (970438)";
+            case "970425": return "ABBank (970425)";
+            case "970452": return "Kienlongbank (970452)";
+            case "970427": return "VietABank (970427)";
+            case "970424": return "Shinhan Bank (970424)";
+            case "970400": return "Saigonbank (970400)";
+            case "970446": return "COOPBANK (970446)";
+            case "970414": return "OceanBank (970414)";
+            case "970408": return "GPBank (970408)";
+            case "970430": return "PG Bank (970430)";
+            default: return "Ngân hàng (BIN " + bankBin.trim() + ")";
         }
     }
 
@@ -551,7 +635,7 @@ public class RoomTransferFragment extends Fragment {
         if (room != null && room.getCreatedBy() != null) {
             return room.getCreatedBy().equalsIgnoreCase(myId);
         }
-        return true;
+        return false;
     }
 
     private void showVerificationDialog(String type, double amount, String source, String destName, String destAccount, String destBank, String note, Runnable onConfirm) {
@@ -610,9 +694,14 @@ public class RoomTransferFragment extends Fragment {
         }
 
         tvSuccessTitle.setText(title);
-        tvSuccessAmount.setText(amountFormatted);
         if (tvSuccessAmount != null) {
-            tvSuccessAmount.setTextColor(ContextCompat.getColor(requireContext(), R.color.text_primary));
+            if (title != null && title.contains("yêu cầu")) {
+                tvSuccessAmount.setVisibility(View.GONE);
+            } else {
+                tvSuccessAmount.setVisibility(View.VISIBLE);
+                tvSuccessAmount.setText(amountFormatted);
+                tvSuccessAmount.setTextColor(ContextCompat.getColor(requireContext(), R.color.text_primary));
+            }
         }
         tvSuccessSource.setText(source);
         tvSuccessDest.setText(dest);
@@ -633,7 +722,7 @@ public class RoomTransferFragment extends Fragment {
                 android.content.ClipboardManager clipboard = (android.content.ClipboardManager) requireContext().getSystemService(android.content.Context.CLIPBOARD_SERVICE);
                 android.content.ClipData clip = android.content.ClipData.newPlainText("TxID", finalTxId);
                 if (clipboard != null) clipboard.setPrimaryClip(clip);
-                AppToaster.info(requireActivity(), "Đã sao chép mã: " + finalTxId);
+                CopyToast.show(requireContext(), requireView());
             });
         }
 
@@ -720,8 +809,9 @@ public class RoomTransferFragment extends Fragment {
                             if (layoutBottomTransferDock != null) {
                                 layoutBottomTransferDock.setVisibility(View.VISIBLE);
                             }
-                            tilTransferWalletAmount.setError(errorMessage);
-                            Toast.makeText(requireContext(), "Chuyển tiền thất bại: " + errorMessage, Toast.LENGTH_LONG).show();
+                            String friendly = ErrorMessageHelper.getFriendlyMessage(errorMessage);
+                            tilTransferWalletAmount.setError(friendly);
+                            Toast.makeText(requireContext(), friendly, Toast.LENGTH_LONG).show();
                         });
                     }
                 });
@@ -808,8 +898,9 @@ public class RoomTransferFragment extends Fragment {
                             if (layoutBottomTransferDock != null) {
                                 layoutBottomTransferDock.setVisibility(View.VISIBLE);
                             }
-                            tilTransferBankAmount.setError(errorMessage);
-                            Toast.makeText(requireContext(), "Chuyển tiền thất bại: " + errorMessage, Toast.LENGTH_LONG).show();
+                            String friendly = ErrorMessageHelper.getFriendlyMessage(errorMessage);
+                            tilTransferBankAmount.setError(friendly);
+                            Toast.makeText(requireContext(), friendly, Toast.LENGTH_LONG).show();
                         });
                     }
                 });

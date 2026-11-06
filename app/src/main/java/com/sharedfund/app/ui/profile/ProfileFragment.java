@@ -3,6 +3,7 @@ package com.sharedfund.app.ui.profile;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
@@ -15,8 +16,11 @@ import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.ProgressBar;
 import android.widget.TextView;
+import android.widget.Toast;
 import com.sharedfund.app.MainActivity;
 import com.sharedfund.app.ui.widget.AppToaster;
+import com.sharedfund.app.util.CopyToast;
+import com.sharedfund.app.util.ErrorMessageHelper;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -37,12 +41,9 @@ import com.sharedfund.app.data.ProfileRepository;
 import com.sharedfund.app.data.RoomRepository;
 import com.sharedfund.app.data.UserSessionManager;
 import com.sharedfund.app.model.Profile;
-import com.sharedfund.app.model.Transaction;
+import com.sharedfund.app.model.Room;
 
-import java.text.DecimalFormat;
-import java.text.DecimalFormatSymbols;
 import java.util.List;
-import java.util.Locale;
 
 public class ProfileFragment extends Fragment {
 
@@ -61,7 +62,7 @@ public class ProfileFragment extends Fragment {
     private EditText etProfileEducation;
     private EditText etProfileBio;
     private TextView tvProfileRoomCount;
-    private TextView tvProfileTxCount;
+    private TextView tvProfileAdminCount;
     private View layoutProfileTopBar;
     private View rowProfileUserId;
     private View cardPersonalDetails;
@@ -85,7 +86,25 @@ public class ProfileFragment extends Fragment {
             if (uri != null) uploadAvatar(uri);
         });
         coverPicker = registerForActivityResult(new ActivityResultContracts.GetContent(), uri -> {
-            if (uri != null) saveProfileCoverUrl(uri.toString());
+            if (uri != null && getContext() != null) {
+                String userId = UserSessionManager.getInstance(requireContext()).getUserId();
+                String targetName = "koin_cover_profile_" + (userId != null ? userId : "guest") + ".jpg";
+                com.sharedfund.app.util.ImageCropHelper.cropAndSaveCoverAsync(requireContext(), uri, targetName, new com.sharedfund.app.util.ImageCropHelper.OnCropFinishedListener() {
+                    @Override
+                    public void onSuccess(String fileUri, android.graphics.Bitmap bitmap) {
+                        saveProfileCoverUrl(fileUri);
+                        if (ivProfileCover != null) {
+                            ivProfileCover.setImageBitmap(bitmap);
+                            ivProfileCover.setVisibility(View.VISIBLE);
+                        }
+                    }
+
+                    @Override
+                    public void onError(Exception e) {
+                        saveProfileCoverUrl(uri.toString());
+                    }
+                });
+            }
         });
     }
 
@@ -184,7 +203,7 @@ public class ProfileFragment extends Fragment {
         etProfileEducation = view.findViewById(R.id.etProfileEducation);
         etProfileBio = view.findViewById(R.id.etProfileBio);
         tvProfileRoomCount = view.findViewById(R.id.tvProfileRoomCount);
-        tvProfileTxCount = view.findViewById(R.id.tvProfileTxCount);
+        tvProfileAdminCount = view.findViewById(R.id.tvProfileAdminCount);
         btnProfileBack = view.findViewById(R.id.btnProfileBack);
         btnEditProfileInfo = view.findViewById(R.id.btnEditProfileInfo);
         btnCancelEditProfileInfo = view.findViewById(R.id.btnCancelEditProfileInfo);
@@ -248,32 +267,31 @@ public class ProfileFragment extends Fragment {
         }
 
         RoomRepository repo = RoomRepository.getInstance();
-        int roomCount = repo.getRoomsLiveData().getValue() != null
-                ? repo.getRoomsLiveData().getValue().size() : 0;
+        List<Room> roomList = repo.getRoomsLiveData().getValue();
+        int roomCount = roomList != null ? roomList.size() : 0;
 
-        double totalContributed = 0.0;
-        List<Transaction> txList = repo.getTransactionsLiveData().getValue();
-        if (txList != null) {
+        int adminCount = 0;
+        if (roomList != null && getContext() != null) {
             String currentUserId = session.getUserId();
-            String currentUserName = profile != null ? profile.getFullName() : null;
-            for (Transaction tx : txList) {
-                if (Transaction.TYPE_INCOME.equals(tx.getType())) {
-                    String author = tx.getCreatedBy();
-                    if (author == null || "Bạn".equalsIgnoreCase(author)
-                            || (currentUserName != null && currentUserName.equalsIgnoreCase(author))
-                            || (currentUserId != null && currentUserId.equals(author))) {
-                        totalContributed += tx.getAmount();
-                    }
+            for (Room room : roomList) {
+                if (room == null) continue;
+                boolean isOwner = "OWNER".equalsIgnoreCase(room.getCurrentUserRole())
+                        || (currentUserId != null && currentUserId.equals(room.getCreatedBy()));
+                boolean isTreasurer = "TREASURER".equalsIgnoreCase(room.getCurrentUserRole())
+                        || (currentUserId != null && requireContext().getSharedPreferences("room_roles_" + room.getId(), Context.MODE_PRIVATE)
+                                .getBoolean("treasurer_" + currentUserId, false));
+                if (isOwner || isTreasurer) {
+                    adminCount++;
                 }
             }
         }
 
-        DecimalFormatSymbols symbols = new DecimalFormatSymbols(Locale.US);
-        symbols.setGroupingSeparator('.');
-        DecimalFormat df = new DecimalFormat("#,##0", symbols);
-
-        tvProfileRoomCount.setText(String.valueOf(roomCount));
-        tvProfileTxCount.setText(df.format(totalContributed) + " ₫");
+        if (tvProfileRoomCount != null) {
+            tvProfileRoomCount.setText(String.valueOf(roomCount));
+        }
+        if (tvProfileAdminCount != null) {
+            tvProfileAdminCount.setText(String.valueOf(adminCount));
+        }
     }
 
     private void setupClickListeners() {
@@ -327,6 +345,10 @@ public class ProfileFragment extends Fragment {
         if (btnEditProfileInfo != null) {
             btnEditProfileInfo.setText("Lưu thay đổi");
             btnEditProfileInfo.setIconResource(R.drawable.ic_check);
+            btnEditProfileInfo.setBackgroundTintList(ColorStateList.valueOf(ContextCompat.getColor(requireContext(), R.color.primary)));
+            btnEditProfileInfo.setTextColor(Color.WHITE);
+            btnEditProfileInfo.setIconTint(ColorStateList.valueOf(Color.WHITE));
+            btnEditProfileInfo.setStrokeWidth(0);
         }
         if (btnCancelEditProfileInfo != null) {
             btnCancelEditProfileInfo.setVisibility(View.VISIBLE);
@@ -355,6 +377,11 @@ public class ProfileFragment extends Fragment {
         if (btnEditProfileInfo != null) {
             btnEditProfileInfo.setText("Chỉnh sửa");
             btnEditProfileInfo.setIconResource(R.drawable.ic_edit);
+            btnEditProfileInfo.setBackgroundTintList(ColorStateList.valueOf(ContextCompat.getColor(requireContext(), R.color.surface_variant)));
+            btnEditProfileInfo.setTextColor(ContextCompat.getColor(requireContext(), R.color.text_primary));
+            btnEditProfileInfo.setIconTint(ColorStateList.valueOf(ContextCompat.getColor(requireContext(), R.color.text_primary)));
+            btnEditProfileInfo.setStrokeWidth((int) (1 * getResources().getDisplayMetrics().density));
+            btnEditProfileInfo.setStrokeColor(ColorStateList.valueOf(ContextCompat.getColor(requireContext(), R.color.border)));
         }
         if (btnCancelEditProfileInfo != null) {
             btnCancelEditProfileInfo.setVisibility(View.GONE);
@@ -362,8 +389,7 @@ public class ProfileFragment extends Fragment {
 
         hideKeyboard();
         loadProfileData();
-        AppToaster.success(requireActivity(), "Đã lưu thay đổi thông tin cá nhân!");
-    }
+            }
 
     private void cancelInlineProfileEdit() {
         isEditingProfile = false;
@@ -372,6 +398,11 @@ public class ProfileFragment extends Fragment {
         if (btnEditProfileInfo != null) {
             btnEditProfileInfo.setText("Chỉnh sửa");
             btnEditProfileInfo.setIconResource(R.drawable.ic_edit);
+            btnEditProfileInfo.setBackgroundTintList(ColorStateList.valueOf(ContextCompat.getColor(requireContext(), R.color.surface_variant)));
+            btnEditProfileInfo.setTextColor(ContextCompat.getColor(requireContext(), R.color.text_primary));
+            btnEditProfileInfo.setIconTint(ColorStateList.valueOf(ContextCompat.getColor(requireContext(), R.color.text_primary)));
+            btnEditProfileInfo.setStrokeWidth((int) (1 * getResources().getDisplayMetrics().density));
+            btnEditProfileInfo.setStrokeColor(ColorStateList.valueOf(ContextCompat.getColor(requireContext(), R.color.border)));
         }
         if (btnCancelEditProfileInfo != null) {
             btnCancelEditProfileInfo.setVisibility(View.GONE);
@@ -420,59 +451,103 @@ public class ProfileFragment extends Fragment {
                 ClipboardManager cm = (ClipboardManager) requireContext().getSystemService(Context.CLIPBOARD_SERVICE);
                 if (cm != null) {
                     cm.setPrimaryClip(ClipData.newPlainText("User ID", uid));
-                    AppToaster.info(requireActivity(), "Đã sao chép ID người dùng vào bộ nhớ tạm");
+                    CopyToast.show(requireContext(), requireView());
                 }
             }
         }
     }
 
     private void showCoverOptions() {
-        new MaterialAlertDialogBuilder(requireContext())
-                .setTitle("Đổi ảnh bìa")
-                .setItems(new String[]{"Chọn ảnh từ thiết bị", "Dán link ảnh"}, (dialog, which) -> {
-                    if (which == 0) {
-                        coverPicker.launch("image/*");
-                    } else {
-                        showCoverUrlDialog();
-                    }
-                })
-                .show();
+        showKoinOptionsDialog("Đổi ảnh bìa", "Chọn phương thức cập nhật ảnh bìa",
+                () -> coverPicker.launch("image/*"),
+                this::showCoverUrlDialog);
     }
 
     private void showCoverUrlDialog() {
-        final EditText input = new EditText(requireContext());
-        input.setHint("https://.../cover.jpg");
-        input.setSingleLine(true);
-        int pad = Math.round(16 * getResources().getDisplayMetrics().density);
-        input.setPadding(pad, pad, pad, pad);
+        showKoinUrlInputDialog("Dán link ảnh bìa", "Nhập đường dẫn hình ảnh trực tuyến", "https://.../cover.jpg",
+                this::saveProfileCoverUrl);
+    }
 
-        new MaterialAlertDialogBuilder(requireContext())
-                .setTitle("Dán link ảnh bìa")
-                .setView(input)
-                .setNegativeButton("Hủy", null)
-                .setPositiveButton("Lưu", (dialog, which) -> {
-                    String url = input.getText().toString().trim();
-                    if (!url.isEmpty()) {
-                        saveProfileCoverUrl(url);
-                    }
-                })
-                .show();
+    private void showKoinOptionsDialog(String title, String subtitle, Runnable onPickFromDevice, Runnable onPasteUrl) {
+        if (getContext() == null) return;
+        View dialogView = LayoutInflater.from(requireContext()).inflate(R.layout.dialog_koin_options, null);
+        TextView tvTitle = dialogView.findViewById(R.id.tvDialogTitle);
+        TextView tvSubtitle = dialogView.findViewById(R.id.tvDialogSubtitle);
+        View btnPick = dialogView.findViewById(R.id.layoutOptionPick);
+        View btnUrl = dialogView.findViewById(R.id.layoutOptionUrl);
+        View btnClose = dialogView.findViewById(R.id.btnDialogClose);
+
+        tvTitle.setText(title);
+        tvSubtitle.setText(subtitle);
+
+        androidx.appcompat.app.AlertDialog dialog = new MaterialAlertDialogBuilder(requireContext())
+                .setView(dialogView)
+                .setBackground(new android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+                .create();
+
+        btnPick.setOnClickListener(v -> {
+            dialog.dismiss();
+            if (onPickFromDevice != null) onPickFromDevice.run();
+        });
+
+        btnUrl.setOnClickListener(v -> {
+            dialog.dismiss();
+            if (onPasteUrl != null) onPasteUrl.run();
+        });
+
+        btnClose.setOnClickListener(v -> dialog.dismiss());
+
+        dialog.show();
+    }
+
+    private void showKoinUrlInputDialog(String title, String subtitle, String hint, java.util.function.Consumer<String> onSave) {
+        if (getContext() == null) return;
+        View dialogView = LayoutInflater.from(requireContext()).inflate(R.layout.dialog_koin_url_input, null);
+        TextView tvTitle = dialogView.findViewById(R.id.tvUrlDialogTitle);
+        TextView tvSubtitle = dialogView.findViewById(R.id.tvUrlDialogSubtitle);
+        EditText etInput = dialogView.findViewById(R.id.etUrlInput);
+        View btnCancel = dialogView.findViewById(R.id.btnUrlCancel);
+        View btnSave = dialogView.findViewById(R.id.btnUrlSave);
+
+        tvTitle.setText(title);
+        tvSubtitle.setText(subtitle);
+        if (hint != null) etInput.setHint(hint);
+
+        androidx.appcompat.app.AlertDialog dialog = new MaterialAlertDialogBuilder(requireContext())
+                .setView(dialogView)
+                .setBackground(new android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+                .create();
+
+        btnCancel.setOnClickListener(v -> dialog.dismiss());
+        btnSave.setOnClickListener(v -> {
+            String url = etInput.getText() != null ? etInput.getText().toString().trim() : "";
+            if (!url.isEmpty()) {
+                dialog.dismiss();
+                if (onSave != null) onSave.accept(url);
+            }
+        });
+
+        dialog.show();
     }
 
     private void saveProfileCoverUrl(String url) {
         if (getContext() == null) return;
+        String userId = UserSessionManager.getInstance(requireContext()).getUserId();
+        String key = "profile_cover_url_" + (userId != null ? userId : "guest");
         requireContext().getSharedPreferences("koin_profile_prefs", Context.MODE_PRIVATE)
                 .edit()
-                .putString("profile_cover_url", url)
+                .putString(key, url)
+                .remove("profile_cover_url")
                 .apply();
         loadProfileCover();
-        AppToaster.success(requireActivity(), "Đã cập nhật ảnh bìa thành công!");
     }
 
     private void loadProfileCover() {
         if (getContext() == null || ivProfileCover == null) return;
+        String userId = UserSessionManager.getInstance(requireContext()).getUserId();
+        String key = "profile_cover_url_" + (userId != null ? userId : "guest");
         String url = requireContext().getSharedPreferences("koin_profile_prefs", Context.MODE_PRIVATE)
-                .getString("profile_cover_url", null);
+                .getString(key, null);
         if (url != null && !url.trim().isEmpty()) {
             ivProfileCover.setVisibility(View.VISIBLE);
             new Thread(() -> {
@@ -498,41 +573,20 @@ public class ProfileFragment extends Fragment {
                 }
             }).start();
         } else {
+            ivProfileCover.setImageDrawable(null);
             ivProfileCover.setVisibility(View.GONE);
         }
     }
 
     private void showAvatarOptions() {
-        new MaterialAlertDialogBuilder(requireContext())
-                .setTitle("Đổi ảnh đại diện")
-                .setItems(new String[]{"Chọn ảnh từ thiết bị", "Dán link ảnh"}, (dialog, which) -> {
-                    if (which == 0) {
-                        avatarPicker.launch("image/*");
-                    } else {
-                        showAvatarUrlDialog();
-                    }
-                })
-                .show();
+        showKoinOptionsDialog("Đổi ảnh đại diện", "Chọn phương thức cập nhật ảnh đại diện",
+                () -> avatarPicker.launch("image/*"),
+                this::showAvatarUrlDialog);
     }
 
     private void showAvatarUrlDialog() {
-        final EditText input = new EditText(requireContext());
-        input.setHint("https://.../avatar.jpg");
-        input.setSingleLine(true);
-        int pad = Math.round(16 * getResources().getDisplayMetrics().density);
-        input.setPadding(pad, pad, pad, pad);
-
-        new MaterialAlertDialogBuilder(requireContext())
-                .setTitle("Dán link ảnh đại diện")
-                .setView(input)
-                .setNegativeButton("Hủy", null)
-                .setPositiveButton("Lưu", (dialog, which) -> {
-                    String url = input.getText().toString().trim();
-                    if (!url.isEmpty()) {
-                        persistAvatarUrl(url);
-                    }
-                })
-                .show();
+        showKoinUrlInputDialog("Dán link ảnh đại diện", "Nhập đường dẫn hình ảnh trực tuyến", "https://.../avatar.jpg",
+                this::persistAvatarUrl);
     }
 
     private void uploadAvatar(Uri imageUri) {
@@ -558,8 +612,7 @@ public class ProfileFragment extends Fragment {
                     UserSessionManager.getInstance(requireContext()).saveAvatarUrl(avatarUrl);
                     tvAvatarInitials.setVisibility(View.VISIBLE);
                     AvatarImageLoader.load(ivProfileAvatar, tvAvatarInitials, avatarUrl);
-                    AppToaster.success(requireActivity(), "Đã cập nhật ảnh đại diện.");
-                });
+                                    });
             }
 
             @Override public void onError(String message) {
@@ -567,7 +620,7 @@ public class ProfileFragment extends Fragment {
                 requireActivity().runOnUiThread(() -> {
                     if (!isAdded()) return;
                     setAvatarLoading(false);
-                    AppToaster.error(requireActivity(), "Không cập nhật được ảnh đại diện: " + message);
+                    AppToaster.error(requireActivity(), "Không cập nhật được ảnh đại diện: " + ErrorMessageHelper.getFriendlyMessage(message));
                 });
             }
         };

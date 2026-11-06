@@ -15,7 +15,6 @@ import com.google.gson.reflect.TypeToken;
 import com.sharedfund.app.model.Room;
 import com.sharedfund.app.model.Transaction;
 import com.sharedfund.app.model.RoomMember;
-import com.sharedfund.app.model.Category;
 import com.sharedfund.app.model.Profile;
 
 import java.util.ArrayList;
@@ -74,6 +73,7 @@ public class RoomRepository {
     }
 
     private RoomRepository() {
+        userRoomsMap.put(currentUserId, new ArrayList<>());
         roomsLiveData.setValue(new ArrayList<>());
         transactionsLiveData.setValue(new ArrayList<>());
         totalBalanceLiveData.setValue(0.0);
@@ -90,19 +90,47 @@ public class RoomRepository {
 
     public synchronized void startRealtime() {
         if (realtimeClient == null) {
-            realtimeClient = new SupabaseRealtimeClient();
-            realtimeClient.setRealtimeListener(tx -> {
-                onRemoteTransactionReceived(tx);
-                if (currentUserId != null && currentUserId.equals(tx.getUserId())) {
-                    loadUserProfile();
+            realtimeClient = SupabaseRealtimeClient.getInstance();
+            realtimeClient.setRealtimeListener(new SupabaseRealtimeClient.RealtimeListener() {
+                @Override
+                public void onTransactionInserted(Transaction tx) {
+                    onRemoteTransactionReceived(tx);
+                    if (currentUserId != null && currentUserId.equals(tx.getUserId())) {
+                        loadUserProfile();
+                    }
+                }
+
+                @Override
+                public void onTransactionDeleted(String transactionId) {
+                    onRemoteTransactionDeleted(transactionId);
+                }
+
+                @Override
+                public void onRoomUpdated(Room room) {
+                    onRemoteRoomReceived(room);
+                }
+
+                @Override
+                public void onRoomDeleted(String roomId) {
+                    onRemoteRoomDeleted(roomId);
+                }
+
+                @Override
+                public void onRoomMemberChanged(String roomId, String eventType, String userId) {
+                    onRemoteMemberChanged(roomId, eventType, userId);
                 }
             });
+            realtimeClient.connect();
+        } else {
             realtimeClient.connect();
         }
     }
 
     public synchronized void setCurrentUser(String userId, String userName) {
         String nextUserId = userId != null ? userId : "";
+        if (nextUserId.isEmpty()) {
+            SupabaseRealtimeClient.getInstance().disconnect();
+        }
         if (!nextUserId.equals(this.currentUserId)) {
             roomList.clear();
             transactionList.clear();
@@ -122,11 +150,11 @@ public class RoomRepository {
 
     private void initMockData() {
         Room r1 = new Room("room-1", "Quỹ Du Lịch Đà Lạt 2026", "DALAT6", 0, "Quỹ gom tiền đi du lịch Đà Lạt mùa hoa dã quỳ của nhóm bạn thân.", 5,
-                new ArrayList<>(java.util.Arrays.asList("Bạn (Trưởng quỹ)", "Tuấn Anh", "Bảo Linh", "Minh Quân", "Thu Hương")), "01/10/2026");
+                new ArrayList<>(java.util.Arrays.asList("Bạn (Chủ quỹ)", "Tuấn Anh", "Bảo Linh", "Minh Quân", "Thu Hương")), "01/10/2026");
         Room r2 = new Room("room-2", "Quỹ Tiền Nhà & Sinh Hoạt Trọ", "TRO102", 0, "Quỹ đóng tiền phòng, điện nước và đồ dùng chung phòng 302.", 3,
-                new ArrayList<>(java.util.Arrays.asList("Bạn (Trưởng quỹ)", "Đức Trí", "Hoàng Nam")), "05/10/2026");
+                new ArrayList<>(java.util.Arrays.asList("Bạn (Chủ quỹ)", "Đức Trí", "Hoàng Nam")), "05/10/2026");
         Room r3 = new Room("room-3", "Quỹ Ăn Trưa & Coffee Team Tech", "TECH88", 0, "Chi phí ăn trưa, trà sữa xế chiều cho team công nghệ.", 4,
-                new ArrayList<>(java.util.Arrays.asList("Bạn", "Quốc Huy (Trưởng quỹ)", "Mai Phương", "Tiến Dũng")), "10/10/2026");
+                new ArrayList<>(java.util.Arrays.asList("Bạn", "Quốc Huy (Chủ quỹ)", "Mai Phương", "Tiến Dũng")), "10/10/2026");
 
         roomList.add(r1);
         roomList.add(r2);
@@ -173,6 +201,25 @@ public class RoomRepository {
     public synchronized void configureAccessToken(String accessToken) {
         token = accessToken != null && !accessToken.trim().isEmpty()
                 ? accessToken : SupabaseConfig.SUPABASE_ANON_KEY;
+        SupabaseRealtimeClient.getInstance().setAuthToken(token);
+    }
+
+    public synchronized List<String> getUserRoomIds() {
+        List<String> list = userRoomsMap.get(currentUserId);
+        List<String> result = list != null ? new ArrayList<>(list) : new ArrayList<>();
+        if (currentUserId == null || currentUserId.isEmpty() || "user-001".equals(currentUserId)) {
+            List<String> mockList = userRoomsMap.get("user-001");
+            if (mockList != null) {
+                for (String id : mockList) {
+                    if (!result.contains(id)) result.add(id);
+                }
+            } else {
+                if (!result.contains("room-1")) result.add("room-1");
+                if (!result.contains("room-2")) result.add("room-2");
+                if (!result.contains("room-3")) result.add("room-3");
+            }
+        }
+        return result;
     }
 
     private Request.Builder request(String path) {
@@ -249,21 +296,6 @@ public class RoomRepository {
         });
     }
 
-    public void loadCategories(DataCallback<List<Category>> callback) {
-        client.newCall(request("/categories?select=id,name,type,icon_name,color_code&order=name.asc").get().build())
-                .enqueue(new okhttp3.Callback() {
-                    @Override public void onFailure(Call call, IOException e) { callback.onError(e.getMessage()); }
-                    @Override public void onResponse(Call call, Response response) throws IOException {
-                        String body = response.body() != null ? response.body().string() : "";
-                        if (!response.isSuccessful()) { callback.onError(error(response, body)); return; }
-                        try {
-                            Type type = new TypeToken<List<Category>>() {}.getType();
-                            List<Category> categories = gson.fromJson(body, type);
-                            callback.onSuccess(categories != null ? categories : new ArrayList<>());
-                        } catch (Exception e) { callback.onError("Invalid categories response: " + e.getMessage()); }
-                    }
-                });
-    }
 
     private void loadMembers(List<Room> rooms, List<Transaction> transactions, DataCallback<List<Room>> callback) {
         StringBuilder ids = new StringBuilder();
@@ -373,8 +405,47 @@ public class RoomRepository {
                 if (!response.isSuccessful()) { callback.onError(error(response, body)); return; }
                 try {
                     JsonArray rows = JsonParser.parseString(body).getAsJsonArray();
-                    if (rows.size() == 0) { callback.onError("Fund room not found with this join code."); return; }
-                    addMember(gson.fromJson(rows.get(0), Room.class), userId, "MEMBER", callback);
+                    if (rows.size() == 0) { callback.onError("Không tìm thấy quỹ với mã tham gia này."); return; }
+                    Room targetRoom = gson.fromJson(rows.get(0), Room.class);
+                    if (userId != null && userId.equalsIgnoreCase(targetRoom.getCreatedBy())) {
+                        callback.onError("Bạn là người tạo quỹ này!");
+                        return;
+                    }
+                    String checkPath = "/room_members?select=id,role&room_id=eq." + targetRoom.getId() + "&user_id=eq." + userId;
+                    client.newCall(request(checkPath).get().build()).enqueue(new okhttp3.Callback() {
+                        @Override public void onFailure(Call call, IOException e) { callback.onError(e.getMessage()); }
+                        @Override public void onResponse(Call call, Response response) throws IOException {
+                            String memBody = response.body() != null ? response.body().string() : "";
+                            if (!response.isSuccessful()) { callback.onError(error(response, memBody)); return; }
+                            try {
+                                JsonArray memRows = JsonParser.parseString(memBody).getAsJsonArray();
+                                if (memRows.size() > 0) {
+                                    callback.onError("Bạn đã là thành viên của quỹ này!");
+                                    return;
+                                }
+                                if (RoomPrivacyManager.isRoomPrivate(targetRoom.getId())) {
+                                    UserSessionManager session = UserSessionManager.getInstance(com.sharedfund.app.SharedFundApp.getInstance());
+                                    String applicantName = session != null ? session.getFullName() : "Thành viên mới";
+                                    String applicantEmail = session != null ? session.getEmail() : "";
+                                    if (applicantName == null || applicantName.trim().isEmpty()) {
+                                        applicantName = "Thành viên mới";
+                                    }
+                                    RoomPrivacyManager.addPendingRequest(targetRoom.getId(), new RoomPrivacyManager.JoinRequestItem(
+                                            userId,
+                                            applicantName,
+                                            applicantEmail,
+                                            "Vừa xong",
+                                            "Xin vào quỹ " + targetRoom.getName()
+                                    ));
+                                    callback.onError("PENDING_APPROVAL:" + targetRoom.getName());
+                                    return;
+                                }
+                                addMember(targetRoom, userId, "MEMBER", callback);
+                            } catch (Exception e) {
+                                callback.onError("Lỗi kiểm tra thành viên: " + e.getMessage());
+                            }
+                        }
+                    });
                 } catch (Exception e) { callback.onError("Invalid room response: " + e.getMessage()); }
             }
         });
@@ -393,7 +464,7 @@ public class RoomRepository {
                     m.setRoomId(roomId);
                     m.setUserId("user-mock-" + i);
                     m.setFullName(name);
-                    m.setRole(name.contains("Trưởng quỹ") ? "OWNER" : "MEMBER");
+                    m.setRole(name.contains("Chủ quỹ") ? "OWNER" : "MEMBER");
                     m.setTotalContributed(perMember);
                     mockMembers.add(m);
                 }
@@ -432,7 +503,7 @@ public class RoomRepository {
         });
     }
 
-    private void addMember(Room room, String userId, String role, DataCallback<Room> callback) {
+    public void addMember(Room room, String userId, String role, DataCallback<Room> callback) {
         room.setCurrentUserRole(role);
         JsonObject row = new JsonObject();
         row.addProperty("room_id", room.getId());
@@ -465,8 +536,8 @@ public class RoomRepository {
         String code = makeJoinCode();
         List<String> members = new ArrayList<>();
         String creatorLabel = currentUserName != null && !currentUserName.isEmpty()
-                ? currentUserName + " (Trưởng quỹ)"
-                : "Bạn (Trưởng quỹ)";
+                ? currentUserName + " (Chủ quỹ)"
+                : "Bạn (Chủ quỹ)";
         members.add(creatorLabel);
         Room newRoom = new Room(id, name, code, 0, description, 1, members);
         if (targetAmount > 0) {
@@ -545,9 +616,6 @@ public class RoomRepository {
         return result;
     }
 
-    public synchronized List<Room> getAllSystemRooms() {
-        return new ArrayList<>(roomList);
-    }
 
     public synchronized void recalculateAllBalances() {
         for (Room r : roomList) {
@@ -624,8 +692,9 @@ public class RoomRepository {
     public boolean isCurrentUserAdmin(String roomId) {
         Room r = getRoomSync(roomId);
         if (r == null) return false;
+        if (currentUserId != null && currentUserId.equals(r.getCreatedBy())) return true;
         String role = r.getCurrentUserRole();
-        return "ADMIN".equalsIgnoreCase(role) || "OWNER".equalsIgnoreCase(role);
+        return "ADMIN".equalsIgnoreCase(role) || "OWNER".equalsIgnoreCase(role) || "TREASURER".equalsIgnoreCase(role);
     }
 
     public void loadUserProfile() {
@@ -676,11 +745,6 @@ public class RoomRepository {
         return null;
     }
 
-    public LiveData<Room> getRoomById(String roomId) {
-        MutableLiveData<Room> result = new MutableLiveData<>();
-        result.setValue(getRoomSync(roomId));
-        return result;
-    }
 
     public synchronized List<Transaction> getTransactionsForRoom(String roomId) {
         List<Transaction> list = new ArrayList<>();
@@ -693,31 +757,8 @@ public class RoomRepository {
         return list;
     }
 
-    public synchronized List<Transaction> getTransactionsForUser(String userId) {
-        List<Transaction> list = new ArrayList<>();
-        if (userId == null) return list;
-        for (Transaction tx : transactionList) {
-            if (userId.equals(tx.getUserId())) {
-                list.add(tx);
-            }
-        }
-        return list;
-    }
 
-    public synchronized List<Transaction> getContributionsForMember(String roomId, String userId) {
-        List<Transaction> list = new ArrayList<>();
-        if (roomId == null || userId == null) return list;
-        for (Transaction tx : transactionList) {
-            if (roomId.equals(tx.getRoomId()) && userId.equals(tx.getUserId()) && tx.isIncome()) {
-                list.add(tx);
-            }
-        }
-        return list;
-    }
 
-    public synchronized List<Room> searchRooms(String query) {
-        return SearchHelper.filterRooms(roomList, query);
-    }
 
     public synchronized double getRoomTotalIncome(String roomId) {
         double sum = 0;
@@ -754,7 +795,7 @@ public class RoomRepository {
         return map;
     }
 
-    private boolean affectsBalance(Transaction transaction) {
+    public boolean affectsBalance(Transaction transaction) {
         if (transaction == null) return false;
         String status = transaction.getStatus();
         return status == null || status.trim().isEmpty()
@@ -766,6 +807,10 @@ public class RoomRepository {
     }
     public synchronized void onRemoteTransactionReceived(Transaction tx) {
         if (tx == null) return;
+        List<String> userRoomIds = getUserRoomIds();
+        if (tx.getRoomId() == null || !userRoomIds.contains(tx.getRoomId())) {
+            return;
+        }
         boolean updated = false;
         for (int i = 0; i < transactionList.size(); i++) {
             if (transactionList.get(i).getId() != null && transactionList.get(i).getId().equals(tx.getId())) {
@@ -777,6 +822,21 @@ public class RoomRepository {
         if (!updated) {
             transactionList.add(0, tx);
         }
+        if (tx.getUserId() != null && !tx.getUserId().trim().isEmpty() && !userAvatarCache.containsKey(tx.getUserId())) {
+            loadUserProfile(tx.getUserId(), null);
+        }
+        recalculateAllBalances();
+        notifyDataChanged();
+    }
+
+    public synchronized void onRemoteTransactionDeleted(String transactionId) {
+        if (transactionId == null) return;
+        for (int i = 0; i < transactionList.size(); i++) {
+            if (transactionId.equals(transactionList.get(i).getId())) {
+                transactionList.remove(i);
+                break;
+            }
+        }
         recalculateAllBalances();
         notifyDataChanged();
     }
@@ -786,16 +846,137 @@ public class RoomRepository {
         boolean updated = false;
         for (int i = 0; i < roomList.size(); i++) {
             if (roomList.get(i).getId() != null && roomList.get(i).getId().equals(room.getId())) {
-                roomList.set(i, room);
+                Room existing = roomList.get(i);
+                existing.setName(room.getName());
+                existing.setDescription(room.getDescription());
+                existing.setTargetAmount(room.getTargetAmount());
+                existing.setArchived(room.isArchived());
+                if (room.getBalance() != 0 || existing.getBalance() == 0) {
+                    existing.setBalance(room.getBalance());
+                }
+                if (room.getCurrentUserRole() != null && !room.getCurrentUserRole().isEmpty()) {
+                    existing.setCurrentUserRole(room.getCurrentUserRole());
+                }
                 updated = true;
                 break;
             }
         }
         if (!updated) {
-            roomList.add(0, room);
+            List<String> list = userRoomsMap.get(currentUserId);
+            if (list == null) {
+                list = new ArrayList<>();
+                userRoomsMap.put(currentUserId, list);
+            }
+            boolean isCreator = room.getCreatedBy() != null && currentUserId != null && !currentUserId.isEmpty() && room.getCreatedBy().equals(currentUserId);
+            boolean isMember = (list != null && list.contains(room.getId()))
+                    || (room.getCurrentUserRole() != null && !room.getCurrentUserRole().isEmpty());
+            if (isCreator || isMember) {
+                if (isCreator && (room.getCurrentUserRole() == null || room.getCurrentUserRole().isEmpty())) {
+                    room.setCurrentUserRole("OWNER");
+                }
+                roomList.add(0, room);
+                if (!list.contains(room.getId())) {
+                    list.add(0, room.getId());
+                }
+            } else {
+                return;
+            }
         }
         recalculateAllBalances();
         notifyDataChanged();
+    }
+
+    public synchronized void onRemoteRoomDeleted(String roomId) {
+        if (roomId == null) return;
+        for (int i = 0; i < roomList.size(); i++) {
+            if (roomId.equals(roomList.get(i).getId())) {
+                roomList.remove(i);
+                break;
+            }
+        }
+        List<String> list = userRoomsMap.get(currentUserId);
+        if (list != null) {
+            list.remove(roomId);
+        }
+        for (int i = transactionList.size() - 1; i >= 0; i--) {
+            if (roomId.equals(transactionList.get(i).getRoomId())) {
+                transactionList.remove(i);
+            }
+        }
+        recalculateAllBalances();
+        notifyDataChanged();
+    }
+
+    public synchronized void onRemoteMemberChanged(String roomId, String eventType, String userId) {
+        if ("DELETE".equalsIgnoreCase(eventType) && currentUserId != null && currentUserId.equals(userId)) {
+            if (roomId != null) {
+                List<String> list = userRoomsMap.get(currentUserId);
+                if (list != null) {
+                    list.remove(roomId);
+                }
+                for (int i = 0; i < roomList.size(); i++) {
+                    if (roomId.equals(roomList.get(i).getId())) {
+                        roomList.remove(i);
+                        break;
+                    }
+                }
+                for (int i = transactionList.size() - 1; i >= 0; i--) {
+                    if (roomId.equals(transactionList.get(i).getRoomId())) {
+                        transactionList.remove(i);
+                    }
+                }
+                recalculateAllBalances();
+                notifyDataChanged();
+            }
+            return;
+        }
+        if (currentUserId != null && currentUserId.equals(userId)) {
+            loadUserData(currentUserId, new DataCallback<List<Room>>() {
+                @Override public void onSuccess(List<Room> value) {}
+                @Override public void onError(String message) {}
+            });
+            return;
+        }
+        if (roomId != null) {
+            refreshRoomMembers(roomId);
+        } else {
+            for (Room r : roomList) {
+                if (r != null && r.getId() != null) {
+                    refreshRoomMembers(r.getId());
+                }
+            }
+        }
+    }
+
+    public void refreshRoomMembers(String roomId) {
+        if (roomId == null || "user-001".equals(currentUserId)) return;
+        String path = "/room_members?select=room_id,role,profiles(full_name)&room_id=eq." + roomId;
+        client.newCall(request(path).get().build()).enqueue(new okhttp3.Callback() {
+            @Override public void onFailure(Call call, IOException e) {}
+            @Override public void onResponse(Call call, Response response) throws IOException {
+                String body = response.body() != null ? response.body().string() : "";
+                if (!response.isSuccessful()) return;
+                try {
+                    JsonArray members = JsonParser.parseString(body).getAsJsonArray();
+                    Room room = getRoomSync(roomId);
+                    if (room != null) {
+                        List<String> names = new ArrayList<>();
+                        for (JsonElement element : members) {
+                            JsonObject row = element.getAsJsonObject();
+                            JsonElement profile = row.get("profiles");
+                            String name = "Member";
+                            if (profile != null && profile.isJsonObject() && profile.getAsJsonObject().has("full_name")) {
+                                name = profile.getAsJsonObject().get("full_name").getAsString();
+                            }
+                            names.add(name);
+                        }
+                        room.setMembers(names);
+                        room.setMemberCount(names.size());
+                        notifyDataChanged();
+                    }
+                } catch (Exception ignored) {}
+            }
+        });
     }
 
     public synchronized void replaceTransactionsForRoom(String roomId, List<Transaction> roomTransactions) {
@@ -848,7 +1029,7 @@ public class RoomRepository {
     public void leaveRoom(String roomId, String userId, DataCallback<Boolean> callback) {
         Room room = getRoomSync(roomId);
         if (room != null && "OWNER".equalsIgnoreCase(room.getCurrentUserRole())) {
-            callback.onError("Trưởng quỹ không thể rời phòng. Vui lòng chuyển quyền hoặc đóng quỹ.");
+            callback.onError("Chủ quỹ không thể rời phòng. Vui lòng chuyển quyền hoặc đóng quỹ.");
             return;
         }
         if ("user-001".equals(currentUserId) || (roomId != null && roomId.startsWith("room-"))) {
@@ -989,17 +1170,61 @@ public class RoomRepository {
         });
     }
 
+
     public void updateMemberRole(String roomId, String targetUserId, String newRole, DataCallback<Boolean> callback) {
+        String path = "/room_members?room_id=eq." + roomId + "&user_id=eq." + targetUserId;
         JsonObject body = new JsonObject();
         body.addProperty("role", newRole);
-        String path = "/room_members?room_id=eq." + roomId + "&user_id=eq." + targetUserId;
         client.newCall(request(path).patch(RequestBody.create(gson.toJson(body), JSON)).build()).enqueue(new okhttp3.Callback() {
+            @Override public void onFailure(Call call, IOException e) {
+                if (callback != null) callback.onError(e.getMessage());
+            }
+            @Override public void onResponse(Call call, Response response) {
+                if (!response.isSuccessful()) {
+                    if (callback != null) callback.onError("HTTP " + response.code());
+                    return;
+                }
+                refreshRoomMembers(roomId);
+                if (callback != null) callback.onSuccess(true);
+            }
+        });
+    }
+
+    public void transferRoomOwnership(String roomId, String oldOwnerUserId, String newOwnerUserId, DataCallback<Boolean> callback) {
+        String roomPath = "/rooms?id=eq." + roomId;
+        JsonObject roomBody = new JsonObject();
+        roomBody.addProperty("created_by", newOwnerUserId);
+        client.newCall(request(roomPath).patch(RequestBody.create(gson.toJson(roomBody), JSON)).build()).enqueue(new okhttp3.Callback() {
+            @Override public void onFailure(Call call, IOException e) {
+                if (callback != null) callback.onError(e.getMessage());
+            }
+            @Override public void onResponse(Call call, Response response) {
+                updateMemberRole(roomId, newOwnerUserId, "OWNER", new DataCallback<Boolean>() {
+                    @Override public void onSuccess(Boolean v1) {
+                        if (oldOwnerUserId != null && !oldOwnerUserId.isEmpty()) {
+                            updateMemberRole(roomId, oldOwnerUserId, "MEMBER", callback);
+                        } else if (callback != null) {
+                            callback.onSuccess(true);
+                        }
+                    }
+                    @Override public void onError(String m1) {
+                        if (callback != null) callback.onError(m1);
+                    }
+                });
+            }
+        });
+    }
+
+    public void removeMember(String roomId, String targetUserId, DataCallback<Boolean> callback) {
+        String path = "/room_members?room_id=eq." + roomId + "&user_id=eq." + targetUserId;
+        client.newCall(request(path).delete().build()).enqueue(new okhttp3.Callback() {
             @Override public void onFailure(Call call, IOException e) { callback.onError(e.getMessage()); }
             @Override public void onResponse(Call call, Response response) {
                 if (!response.isSuccessful()) {
                     callback.onError("HTTP " + response.code());
                     return;
                 }
+                refreshRoomMembers(roomId);
                 callback.onSuccess(true);
             }
         });

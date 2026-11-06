@@ -30,12 +30,13 @@ import com.google.android.material.textfield.TextInputEditText;
 import com.google.android.material.textfield.TextInputLayout;
 import com.google.gson.JsonObject;
 import com.sharedfund.app.R;
-import com.sharedfund.app.ui.widget.AppToaster;
 import com.sharedfund.app.data.RoomRepository;
 import com.sharedfund.app.data.TransactionRepository;
 import com.sharedfund.app.data.UserSessionManager;
 import com.sharedfund.app.ui.widget.CategoryChipHelper;
 import com.sharedfund.app.util.VietnameseCurrencyWords;
+import com.sharedfund.app.util.CopyToast;
+import com.sharedfund.app.util.ErrorMessageHelper;
 import com.sharedfund.app.model.Room;
 import com.sharedfund.app.model.Transaction;
 
@@ -369,10 +370,15 @@ public class FundActionFragment extends Fragment {
 
     private void setupCategoryChips() {
         boolean isOwner = isCurrentUserOwner();
+        boolean isTreasurer = isCurrentUserTreasurer();
         if (tvWithdrawRoleHint != null) {
-            tvWithdrawRoleHint.setText(isOwner
-                    ? "Bạn là Trưởng quỹ: Tiền rút sẽ được cộng trực tiếp vào Ví Koin cá nhân của bạn."
-                    : "Bạn là Thành viên: Yêu cầu rút quỹ sẽ được gửi đến Trưởng quỹ phê duyệt.");
+            if (isOwner) {
+                tvWithdrawRoleHint.setText("Bạn là Chủ quỹ: Tiền rút sẽ được cộng trực tiếp vào Ví Koin cá nhân của bạn.");
+            } else if (isTreasurer) {
+                tvWithdrawRoleHint.setText("Bạn là Phó quỹ: Yêu cầu rút quỹ sẽ được gửi đến Chủ quỹ phê duyệt để đảm bảo an toàn tài chính nhóm.");
+            } else {
+                tvWithdrawRoleHint.setText("Bạn là Thành viên: Yêu cầu rút quỹ sẽ được gửi đến Chủ quỹ phê duyệt.");
+            }
         }
 
         List<CategoryChipHelper.CategoryItem> categories = CategoryChipHelper.getDefaultExpenseCategories();
@@ -394,18 +400,63 @@ public class FundActionFragment extends Fragment {
 
         walletBalance = RoomRepository.getInstance().getUserWalletBalance();
         tvFundActionWalletBalance.setText("Số dư Ví cá nhân: " + df.format(walletBalance) + " ₫");
-    }
 
-    private boolean isCurrentUserOwner() {
         String myId = UserSessionManager.getInstance(requireContext()).getUserId();
         if (myId == null || myId.isEmpty()) {
             myId = RoomRepository.getInstance().getCurrentUserId();
         }
-        Room room = RoomRepository.getInstance().getRoomSync(roomId);
-        if (room != null && room.getCreatedBy() != null) {
-            return room.getCreatedBy().equalsIgnoreCase(myId);
+        if (myId != null && !myId.isEmpty()) {
+            RoomRepository.getInstance().loadWalletBalance(myId, new RoomRepository.DataCallback<Double>() {
+                @Override
+                public void onSuccess(Double balance) {
+                    if (!isAdded()) return;
+                    requireActivity().runOnUiThread(() -> {
+                        walletBalance = balance != null ? balance : 0.0;
+                        tvFundActionWalletBalance.setText("Số dư Ví cá nhân: " + df.format(walletBalance) + " ₫");
+                    });
+                }
+
+                @Override
+                public void onError(String error) {
+                }
+            });
         }
-        return true;
+    }
+
+    private boolean isCurrentUserTreasurer() {
+        if (getContext() == null || roomId == null) return false;
+        String myId = UserSessionManager.getInstance(requireContext()).getUserId();
+        if (myId == null || myId.isEmpty()) {
+            myId = RoomRepository.getInstance().getCurrentUserId();
+        }
+        if (myId == null) return false;
+        java.util.Set<String> set = requireContext().getSharedPreferences("room_roles_" + roomId, android.content.Context.MODE_PRIVATE)
+                .getStringSet("treasurer_ids", java.util.Collections.emptySet());
+        return set.contains(myId) || requireContext().getSharedPreferences("room_roles_" + roomId, android.content.Context.MODE_PRIVATE)
+                .getBoolean("treasurer_" + myId, false);
+    }
+
+    private boolean isCurrentUserOwner() {
+        if (getContext() == null) return false;
+        String myId = UserSessionManager.getInstance(requireContext()).getUserId();
+        if (myId == null || myId.isEmpty()) {
+            myId = RoomRepository.getInstance().getCurrentUserId();
+        }
+        if (roomId != null) {
+            String savedOwnerId = requireContext().getSharedPreferences("room_roles_" + roomId, android.content.Context.MODE_PRIVATE)
+                    .getString("owner_id", null);
+            if (savedOwnerId != null) {
+                return myId != null && myId.equals(savedOwnerId);
+            }
+        }
+        Room room = RoomRepository.getInstance().getRoomSync(roomId);
+        if (room != null) {
+            if ("OWNER".equalsIgnoreCase(room.getCurrentUserRole())) return true;
+            if (room.getCreatedBy() != null && myId != null) {
+                return room.getCreatedBy().equalsIgnoreCase(myId);
+            }
+        }
+        return false;
     }
 
     private void validateAndProceedContribute() {
@@ -468,18 +519,16 @@ public class FundActionFragment extends Fragment {
         }
         tilWithdrawAmount.setError(null);
 
-        String note = etWithdrawNote.getText() != null ? etWithdrawNote.getText().toString().trim() : "";
-        String category = selectedWithdrawCategory;
-        if (category == null || category.trim().isEmpty()) {
-            if (!note.isEmpty()) {
-                category = note;
-            } else {
-                category = "Khác";
-            }
-        }
+        String userNote = etWithdrawNote.getText() != null ? etWithdrawNote.getText().toString().trim() : "";
+        String category = selectedWithdrawCategory != null && !selectedWithdrawCategory.trim().isEmpty()
+                ? selectedWithdrawCategory.trim() : "Khác";
         selectedWithdrawCategory = category;
-        if (note.isEmpty()) {
-            note = category.equals("Khác") ? "Rút quỹ về Ví Koin" : category;
+
+        String note;
+        if (!userNote.isEmpty()) {
+            note = "Rút quỹ về Ví Koin: " + userNote;
+        } else {
+            note = "Rút quỹ về Ví Koin" + (category.equalsIgnoreCase("Khác") ? "" : " - " + category);
         }
 
         showFullVerificationScreen(false, amount, note);
@@ -555,9 +604,9 @@ public class FundActionFragment extends Fragment {
                     layoutProcessingNotice.setVisibility(View.GONE);
                     layoutFundActionForm.setVisibility(View.VISIBLE);
                     layoutBottomActionDock.setVisibility(View.VISIBLE);
-                    String friendly = AppToaster.sanitizeErrorMessage(errorMessage);
+                    String friendly = ErrorMessageHelper.getFriendlyMessage(errorMessage);
                     tilContributeAmount.setError(friendly);
-                    AppToaster.error(requireActivity(), "Góp quỹ thất bại", friendly);
+                    Toast.makeText(requireContext(), friendly, Toast.LENGTH_LONG).show();
                 });
             }
         });
@@ -607,8 +656,9 @@ public class FundActionFragment extends Fragment {
                             layoutProcessingNotice.setVisibility(View.GONE);
                             layoutFundActionForm.setVisibility(View.VISIBLE);
                             layoutBottomActionDock.setVisibility(View.VISIBLE);
-                            tilWithdrawAmount.setError(errorMessage);
-                            Toast.makeText(requireContext(), "Rút quỹ thất bại: " + errorMessage, Toast.LENGTH_LONG).show();
+                            String friendly = ErrorMessageHelper.getFriendlyMessage(errorMessage);
+                            tilWithdrawAmount.setError(friendly);
+                            Toast.makeText(requireContext(), friendly, Toast.LENGTH_LONG).show();
                         });
                     }
                 });
@@ -639,7 +689,7 @@ public class FundActionFragment extends Fragment {
             ClipboardManager clipboard = (ClipboardManager) requireContext().getSystemService(Context.CLIPBOARD_SERVICE);
             ClipData clip = ClipData.newPlainText("TxID", finalTxId);
             if (clipboard != null) clipboard.setPrimaryClip(clip);
-            AppToaster.info(requireActivity(), "Đã sao chép mã: " + finalTxId);
+            CopyToast.show(requireContext(), requireView());
         });
 
         btnSuccessDone.setOnClickListener(v -> requireActivity().getSupportFragmentManager().popBackStack());

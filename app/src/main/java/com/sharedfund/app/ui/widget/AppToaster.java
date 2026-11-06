@@ -7,17 +7,14 @@ import android.app.Activity;
 import android.app.Dialog;
 import android.content.Context;
 import android.content.ContextWrapper;
-import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.TypedValue;
-import android.view.DisplayCutout;
 import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
-import android.view.WindowInsets;
 import android.view.animation.AccelerateInterpolator;
 import android.view.animation.DecelerateInterpolator;
 import android.view.animation.LinearInterpolator;
@@ -331,27 +328,21 @@ public class AppToaster {
     }
 
     public static void success(Activity activity, String message) {
-        show(activity, ToastType.SUCCESS, null, message);
     }
 
     public static void success(Activity activity, String title, String message) {
-        show(activity, ToastType.SUCCESS, title, message);
     }
 
     public static void success(Fragment fragment, String message) {
-        show(fragment, ToastType.SUCCESS, null, message);
     }
 
     public static void success(Fragment fragment, String title, String message) {
-        show(fragment, ToastType.SUCCESS, title, message);
     }
 
     public static void success(Context context, String message) {
-        show(context, ToastType.SUCCESS, null, message);
     }
 
     public static void success(Context context, String title, String message) {
-        show(context, ToastType.SUCCESS, title, message);
     }
 
     public static void info(Activity activity, String message) {
@@ -388,6 +379,12 @@ public class AppToaster {
         }
         if (lower.contains("jwt") || lower.contains("unauthorized") || lower.contains("expired") || lower.contains("token")) {
             return "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.";
+        }
+        if (lower.contains("invalid login") || lower.contains("invalid credentials") || lower.contains("invalid_credentials") || lower.contains("invalid_grant") || lower.contains("wrong password") || lower.contains("email not confirmed") || lower.contains("email hoặc mật khẩu")) {
+            return "Email hoặc mật khẩu không đúng.";
+        }
+        if (lower.contains("user already registered") || lower.contains("email already exists") || lower.contains("email này đã")) {
+            return "Email này đã được đăng ký.";
         }
         if (lower.contains("insufficient") || lower.contains("số dư không đủ")) {
             return "Số dư không đủ để thực hiện giao dịch.";

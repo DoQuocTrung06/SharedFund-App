@@ -21,7 +21,11 @@ import androidx.core.content.ContextCompat;
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment;
 import com.google.android.material.button.MaterialButton;
 import com.sharedfund.app.R;
+import com.sharedfund.app.data.RoomRepository;
+import com.sharedfund.app.model.RoomMember;
 import com.sharedfund.app.model.Transaction;
+import java.util.List;
+import com.sharedfund.app.util.CopyToast;
 
 import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
@@ -97,6 +101,7 @@ public class TransactionDetailBottomSheet extends BottomSheetDialogFragment {
         TextView tvDetailBalanceAfter = view.findViewById(R.id.tvDetailBalanceAfter);
 
         LinearLayout layoutRejectionReason = view.findViewById(R.id.layoutRejectionReason);
+        TextView tvRejectionReasonTitle = view.findViewById(R.id.tvRejectionReasonTitle);
         TextView tvRejectionReasonContent = view.findViewById(R.id.tvRejectionReasonContent);
         LinearLayout layoutAdminActions = view.findViewById(R.id.layoutAdminActions);
         MaterialButton btnRejectExpense = view.findViewById(R.id.btnRejectExpense);
@@ -111,7 +116,7 @@ public class TransactionDetailBottomSheet extends BottomSheetDialogFragment {
             ClipData clip = ClipData.newPlainText("Transaction Code", code);
             if (clipboard != null) {
                 clipboard.setPrimaryClip(clip);
-                Toast.makeText(requireContext(), "Đã sao chép mã: " + code, Toast.LENGTH_SHORT).show();
+                CopyToast.show(requireContext(), requireView());
             }
         });
 
@@ -129,6 +134,9 @@ public class TransactionDetailBottomSheet extends BottomSheetDialogFragment {
             if (transaction.isIncome()) {
                 tvDetailType.setText("Góp tiền vào quỹ");
                 tvDetailRecipient.setText("Quỹ nhóm");
+            } else if (com.sharedfund.app.ui.home.WalletTransactionsFragment.isWithdrawToWallet(transaction)) {
+                tvDetailType.setText("Rút quỹ về Ví Koin");
+                tvDetailRecipient.setText("Ví cá nhân Koin");
             } else {
                 tvDetailType.setText("Chi tiêu quỹ nhóm");
                 tvDetailRecipient.setText("Thụ hưởng khoản chi");
@@ -174,6 +182,42 @@ public class TransactionDetailBottomSheet extends BottomSheetDialogFragment {
             tvDetailStatusBadge.setBackgroundResource(R.drawable.bg_expense_badge);
             tvDetailStatusBadge.setTextColor(ContextCompat.getColor(requireContext(), R.color.accent_expense));
             layoutRejectionReason.setVisibility(View.VISIBLE);
+            if (tvRejectionReasonTitle != null) {
+                tvRejectionReasonTitle.setText("Lý do từ chối từ Chủ quỹ:");
+            }
+            if (transaction.getRoomId() != null && !transaction.getRoomId().isEmpty()) {
+                RoomRepository.getInstance().loadRoomMembers(transaction.getRoomId(), new RoomRepository.DataCallback<List<RoomMember>>() {
+                    @Override
+                    public void onSuccess(List<RoomMember> members) {
+                        if (!isAdded() || members == null) return;
+                        String approverId = transaction.getApprovedBy();
+                        String roleName = "Chủ quỹ";
+                        if (approverId != null && !approverId.isEmpty()) {
+                            for (RoomMember m : members) {
+                                if (approverId.equals(m.getUserId())) {
+                                    if ("TREASURER".equalsIgnoreCase(m.getRole()) || "VICE".equalsIgnoreCase(m.getRole())) {
+                                        roleName = "Phó quỹ";
+                                    } else {
+                                        roleName = "Chủ quỹ";
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                        final String finalRole = roleName;
+                        if (getActivity() != null) {
+                            getActivity().runOnUiThread(() -> {
+                                if (tvRejectionReasonTitle != null) {
+                                    tvRejectionReasonTitle.setText("Lý do từ chối từ " + finalRole + ":");
+                                }
+                            });
+                        }
+                    }
+
+                    @Override
+                    public void onError(String message) {}
+                });
+            }
             String reason = transaction.getRejectionReason();
             tvRejectionReasonContent.setText(reason != null && !reason.trim().isEmpty() ? reason : "Không có lý do cụ thể");
         } else {
@@ -211,27 +255,49 @@ public class TransactionDetailBottomSheet extends BottomSheetDialogFragment {
     }
 
     private void showRejectInputDialog() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(requireContext());
-        builder.setTitle("Lý do từ chối yêu cầu chi");
+        if (getContext() == null) return;
+        androidx.appcompat.app.AlertDialog dialog = new androidx.appcompat.app.AlertDialog.Builder(requireContext()).create();
+        View view = LayoutInflater.from(requireContext()).inflate(R.layout.dialog_koin_reject_expense, null);
+        dialog.setView(view);
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+        }
 
-        final EditText input = new EditText(requireContext());
-        input.setHint("Nhập lý do cụ thể (bắt buộc)...");
-        input.setPadding(40, 30, 40, 30);
-        builder.setView(input);
+        View layoutInputBox = view.findViewById(R.id.layoutRejectInputBox);
+        TextView tvError = view.findViewById(R.id.tvRejectReasonError);
+        EditText etReason = view.findViewById(R.id.etRejectReason);
+        com.google.android.material.button.MaterialButton btnCancel = view.findViewById(R.id.btnCancelReject);
+        com.google.android.material.button.MaterialButton btnConfirm = view.findViewById(R.id.btnConfirmReject);
 
-        builder.setPositiveButton("Xác nhận từ chối", (dialog, which) -> {
-            String reason = input.getText().toString().trim();
-            if (reason.isEmpty()) {
-                Toast.makeText(requireContext(), "Bắt buộc phải nhập lý do từ chối!", Toast.LENGTH_SHORT).show();
-                return;
-            }
-            if (actionListener != null) {
-                actionListener.onReject(transaction, reason);
-            }
-            dismiss();
-        });
+        if (etReason != null) {
+            etReason.addTextChangedListener(new android.text.TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+                @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+                    if (tvError != null) tvError.setVisibility(View.GONE);
+                    if (layoutInputBox != null) layoutInputBox.setBackgroundResource(R.drawable.bg_input_box);
+                }
+                @Override public void afterTextChanged(android.text.Editable s) {}
+            });
+        }
 
-        builder.setNegativeButton("Hủy", (dialog, which) -> dialog.cancel());
-        builder.show();
+        if (btnCancel != null) btnCancel.setOnClickListener(v -> dialog.dismiss());
+        if (btnConfirm != null) {
+            btnConfirm.setOnClickListener(v -> {
+                String reason = etReason != null && etReason.getText() != null ? etReason.getText().toString().trim() : "";
+                if (reason.isEmpty()) {
+                    if (tvError != null) tvError.setVisibility(View.VISIBLE);
+                    if (layoutInputBox != null) layoutInputBox.setBackgroundResource(R.drawable.bg_input_box_error);
+                    if (etReason != null) etReason.requestFocus();
+                    return;
+                }
+                dialog.dismiss();
+                if (actionListener != null) {
+                    actionListener.onReject(transaction, reason);
+                }
+                dismiss();
+            });
+        }
+
+        dialog.show();
     }
 }
